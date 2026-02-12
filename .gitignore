@@ -1,0 +1,130 @@
+# ============================================
+# Node.js / JavaScript / TypeScript
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Dependency lock files (keep package-lock.json, exclude pnpm-lock.yaml if not using)
+pnpm-lock.yaml
+
+# ============================================
+# Environment Variables & Secrets
+# ============================================
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# ============================================
+# Databases
+# ============================================
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Prisma
+.prisma/
+
+# ============================================
+# Rust
+# ============================================
+# Build artifacts
+target/
+Cargo.lock
+
+# ============================================
+# Operating System Files
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================
+# IDEs and Editors
+# ============================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# JetBrains (IntelliJ, WebStorm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*.swn
+*.bak
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# Logs
+# ============================================
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================
+# Testing & Coverage
+# ============================================
+coverage/
+.nyc_output/
+*.lcov
+
+# ============================================
+# Temporary Files
+# ============================================
+tmp/
+temp/
+*.tmp
+*.temp
+
+# ============================================
+# Misc
+# ============================================
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vercel
+.turbo

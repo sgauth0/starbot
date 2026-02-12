@@ -1,0 +1,70 @@
+// Starbot API - SQLite Schema
+// Simple, local-first storage for projects, chats, and messages
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../starbot.db"
+}
+
+// Project: top-level container for organizing chats
+model Project {
+  id         String   @id @default(uuid())
+  name       String
+  createdAt  DateTime @default(now())
+
+  chats      Chat[]
+
+  @@map("projects")
+}
+
+// Chat: conversation thread within a project
+model Chat {
+  id         String   @id @default(uuid())
+  projectId  String
+  title      String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages   Message[]
+  events     Event[]
+
+  @@index([projectId])
+  @@index([updatedAt])
+  @@map("chats")
+}
+
+// Message: individual message in a chat
+model Message {
+  id         String   @id @default(uuid())
+  chatId     String
+  role       String   // user | assistant | tool | system
+  content    String
+  createdAt  DateTime @default(now())
+
+  chat       Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+// Event: audit trail for streaming events (optional, for debugging)
+model Event {
+  id         String   @id @default(uuid())
+  chatId     String
+  type       String   // token.delta | tool.start | tool.end | status | error
+  payload    String   // JSON string
+  createdAt  DateTime @default(now())
+
+  chat       Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("events")
+}

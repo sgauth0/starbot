@@ -1,0 +1,182 @@
+// Generation route (streaming with real model routing)
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { prisma } from '../db.js';
+import { runTriage } from '../services/triage/index.js';
+import { getBestModelForTier } from '../services/model-catalog.js';
+import { getProvider } from '../providers/index.js';
+
+const RunChatSchema = z.object({
+  mode: z.enum(['quick', 'standard', 'deep']).optional().default('standard'),
+  model_prefs: z.string().optional(),
+  speed: z.boolean().optional().default(false),
+  auto: z.boolean().optional().default(true),
+});
+
+interface RunParams {
+  Params: {
+    chatId: string;
+  };
+}
+
+export async function generationRoutes(server: FastifyInstance) {
+  // POST /v1/chats/:chatId/run - Start generation (SSE streaming)
+  server.post<RunParams>('/chats/:chatId/run', async (request, reply) => {
+    const { chatId } = request.params;
+    const body = RunChatSchema.parse(request.body);
+
+    // Verify chat exists
+    const chat = await prisma.chat.findUnique({
+      where: { id: chatId },
+      include: {
+        messages: {
+          orderBy: { createdAt: 'asc' },
+          take: 50, // Last 50 messages for context
+        },
+      },
+    });
+
+    if (!chat) {
+      return reply.code(404).send({ error: 'Chat not found' });
+    }
+
+    // Set up SSE streaming
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+
+    // Helper to send SSE events
+    const sendEvent = (type: string, data: any) => {
+      reply.raw.write(`event: ${type}\n`);
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      sendEvent('status', { message: 'Running triage...' });
+
+      // 1. Run triage on last user message
+      const lastUserMsg = chat.messages.filter(m => m.role === 'user').pop();
+      if (!lastUserMsg) {
+        throw new Error('No user message found in chat');
+      }
+
+      const triageResult = runTriage({
+        user_message: lastUserMsg.content,
+        mode: body.mode,
+      });
+
+      const { category, lane, complexity } = triageResult.decision;
+
+      sendEvent('status', {
+        message: `Routing (${category}/${lane}, complexity: ${complexity})...`,
+      });
+
+      // 2. Map lane to tier (quick=1, standard=2, deep=3)
+      const tierMap = { quick: 1, standard: 2, deep: 3 };
+      const tier = tierMap[lane];
+
+      // 3. Select model from catalog
+      const selectedModel = await getBestModelForTier(tier, 'text', true);
+
+      if (!selectedModel) {
+        throw new Error('No models available. Please configure at least one provider.');
+      }
+
+      sendEvent('status', {
+        message: `Using ${selectedModel.displayName} (${selectedModel.provider})...`,
+      });
+
+      // 4. Get provider
+      const provider = getProvider(selectedModel.provider);
+
+      // 5. Convert messages to provider format
+      const providerMessages = chat.messages.map(m => ({
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: m.content,
+      }));
+
+      // 6. Stream response from provider
+      let fullResponse = '';
+      let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+      for await (const chunk of provider.sendChatStream(providerMessages, {
+        model: selectedModel.deploymentName,
+        maxTokens: selectedModel.maxOutputTokens,
+        temperature: 0.7,
+      })) {
+        if (chunk.text) {
+          fullResponse += chunk.text;
+          sendEvent('token.delta', { text: chunk.text });
+        }
+
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
+      }
+
+      // 7. Save assistant message
+      const assistantMessage = await prisma.message.create({
+        data: {
+          chatId,
+          role: 'assistant',
+          content: fullResponse,
+        },
+      });
+
+      // 8. Update chat title if needed
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+          updatedAt: new Date(),
+          title: chat.title === 'New Chat'
+            ? lastUserMsg.content.slice(0, 50) + (lastUserMsg.content.length > 50 ? '...' : '')
+            : chat.title,
+        },
+      });
+
+      // 9. Send final event
+      sendEvent('message.final', {
+        id: assistantMessage.id,
+        role: 'assistant',
+        content: fullResponse,
+        provider: selectedModel.provider,
+        model: selectedModel.displayName,
+        usage: {
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          totalTokens: usage.totalTokens,
+        },
+        triage: {
+          category,
+          lane,
+          complexity,
+          elapsed_ms: triageResult.elapsed_ms,
+        },
+      });
+
+      sendEvent('chat.updated', {
+        id: chatId,
+        title: chat.title,
+        updatedAt: new Date().toISOString(),
+      });
+
+      reply.raw.end();
+    } catch (err) {
+      server.log.error(err);
+      sendEvent('error', {
+        message: err instanceof Error ? err.message : 'Unknown error',
+        fatal: true,
+      });
+      reply.raw.end();
+    }
+  });
+
+  // POST /v1/chats/:chatId/cancel - Cancel ongoing generation
+  server.post<RunParams>('/chats/:chatId/cancel', async (request, reply) => {
+    const { chatId } = request.params;
+
+    // TODO: Implement cancellation logic with AbortController
+    // For now, just return success
+    return { ok: true, message: 'Cancellation not yet implemented' };
+  });
+}
