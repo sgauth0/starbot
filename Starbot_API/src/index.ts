@@ -12,6 +12,7 @@ import { projectRoutes } from './routes/projects.js';
 import { chatRoutes } from './routes/chats.js';
 import { messageRoutes } from './routes/messages.js';
 import { generationRoutes } from './routes/generation.js';
+import { modelRoutes } from './routes/models.js';
 
 const PORT = env.PORT;
 const HOST = env.HOST;
@@ -52,6 +53,7 @@ await server.register(projectRoutes, { prefix: '/v1' });
 await server.register(chatRoutes, { prefix: '/v1' });
 await server.register(messageRoutes, { prefix: '/v1' });
 await server.register(generationRoutes, { prefix: '/v1' });
+await server.register(modelRoutes, { prefix: '/v1' });
 
 // Start server
 try {

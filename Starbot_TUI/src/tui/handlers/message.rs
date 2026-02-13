@@ -2,9 +2,10 @@
 // Contains handle_tui_msg function for processing async results
 
 use tokio::sync::mpsc;
+use serde_json::json;
 
 use crate::api::ApiClient;
-use crate::tui::types::{App, TuiMsg, ChatMsg, ChatRole, Mode};
+use crate::tui::types::{App, TuiMsg, ChatMsg, ChatRole, Mode, ThreadOption};
 use crate::parse::response::{extract_reply, extract_provider_model, extract_usage_line};
 
 // Import helper functions from parent tui module
@@ -359,6 +360,80 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
                 }
             }
 
+            let chat_id = metadata
+                .get("chatId")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    metadata
+                        .get("chat")
+                        .and_then(|v| v.get("id"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                });
+
+            let chat_title = metadata
+                .get("chatTitle")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    metadata
+                        .get("chat")
+                        .and_then(|v| v.get("title"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                });
+
+            let chat_updated_at = metadata
+                .get("chat")
+                .and_then(|v| v.get("updatedAt"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+
+            if let Some(chat_id) = chat_id {
+                app.active_thread_id = Some(chat_id.clone());
+
+                if let Some(existing) = app.thread_options.iter_mut().find(|t| t.id == chat_id) {
+                    if let Some(title) = chat_title.clone() {
+                        existing.title = title;
+                    }
+                    if let Some(updated_at) = chat_updated_at.clone() {
+                        existing.last_message_at = Some(updated_at);
+                    }
+                    existing.message_count = existing.message_count.saturating_add(1);
+                } else {
+                    app.thread_options.insert(
+                        0,
+                        ThreadOption {
+                            id: chat_id.clone(),
+                            title: chat_title.clone().unwrap_or_else(|| "Current Chat".to_string()),
+                            mode: None,
+                            last_message_at: chat_updated_at.clone(),
+                            is_pinned: false,
+                            message_count: 1,
+                        },
+                    );
+                }
+
+                if let Some(idx) = app.thread_options.iter().position(|t| t.id == chat_id) {
+                    app.thread_state.select(Some(idx));
+                }
+            }
+
+            if let Some(title) = chat_title {
+                app.active_thread_title = Some(title);
+            }
+
             // Extract metadata
             let (provider, model) = extract_provider_model(&metadata);
             app.last_provider = provider.clone();
@@ -403,9 +478,58 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
             app.bg_tasks = app.bg_tasks.saturating_sub(1);
             match res {
                 Ok(resp) => {
-                    // TODO: Parse projects and populate app.workspace_options (rename to project_options later)
-                    app.status = format!("Loaded {} projects",
-                        resp.json.get("projects").and_then(|p| p.as_array()).map(|a| a.len()).unwrap_or(0));
+                    let workspaces = resp
+                        .json
+                        .get("projects")
+                        .and_then(|v| v.as_array())
+                        .map(|projects| {
+                            projects
+                                .iter()
+                                .filter_map(|project| {
+                                    let id = project
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())?;
+                                    let name = project
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or("Project");
+                                    let last_used_at = project
+                                        .get("updatedAt")
+                                        .or_else(|| project.get("createdAt"))
+                                        .and_then(|v| v.as_str());
+                                    Some(json!({
+                                        "id": id,
+                                        "name": name,
+                                        "rootPath": serde_json::Value::Null,
+                                        "archived": false,
+                                        "lastUsedAt": last_used_at,
+                                    }))
+                                })
+                                .collect::<Vec<serde_json::Value>>()
+                        })
+                        .unwrap_or_default();
+
+                    let normalized = json!({ "workspaces": workspaces });
+                    if let Some(options) = parse_workspace_options(&normalized) {
+                        app.workspace_options = options;
+                        if app.workspace_state.selected().is_none() && !app.workspace_options.is_empty() {
+                            app.workspace_state.select(Some(0));
+                        }
+                        if let Some(ref sel_id) = app.selected_workspace_id {
+                            if let Some(idx) = app.workspace_options.iter().position(|w| w.id == *sel_id) {
+                                app.workspace_state.select(Some(idx));
+                                app.selected_workspace_name =
+                                    Some(app.workspace_options[idx].name.clone());
+                            }
+                        }
+                        app.status = format!("Loaded {} projects", app.workspace_options.len());
+                    } else {
+                        app.status = "Failed parsing /v1/projects response.".to_string();
+                    }
                 }
                 Err(err) => {
                     app.status = format!("Failed to load projects: {err}");
@@ -416,9 +540,62 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
             app.bg_tasks = app.bg_tasks.saturating_sub(1);
             match res {
                 Ok(resp) => {
-                    // TODO: Parse chats and populate app.thread_options (rename to chat_options later)
-                    app.status = format!("Loaded {} chats",
-                        resp.json.get("chats").and_then(|c| c.as_array()).map(|a| a.len()).unwrap_or(0));
+                    let threads = resp
+                        .json
+                        .get("chats")
+                        .and_then(|v| v.as_array())
+                        .map(|chats| {
+                            chats
+                                .iter()
+                                .filter_map(|chat| {
+                                    let id = chat
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())?;
+                                    let title = chat
+                                        .get("title")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or("Untitled");
+                                    let updated_at = chat.get("updatedAt").and_then(|v| v.as_str());
+                                    let message_count = chat
+                                        .get("_count")
+                                        .and_then(|v| v.get("messages"))
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0);
+
+                                    Some(json!({
+                                        "id": id,
+                                        "title": title,
+                                        "mode": serde_json::Value::Null,
+                                        "lastMessageAt": updated_at,
+                                        "isPinned": false,
+                                        "_count": { "messages": message_count },
+                                    }))
+                                })
+                                .collect::<Vec<serde_json::Value>>()
+                        })
+                        .unwrap_or_default();
+
+                    let normalized = json!({ "threads": threads });
+                    if let Some(options) = parse_thread_options(&normalized) {
+                        app.thread_options = options;
+                        if app.thread_state.selected().is_none() && !app.thread_options.is_empty() {
+                            app.thread_state.select(Some(0));
+                        }
+                        if let Some(ref thread_id) = app.active_thread_id {
+                            if let Some(idx) = app.thread_options.iter().position(|t| t.id == *thread_id) {
+                                app.thread_state.select(Some(idx));
+                                app.active_thread_title =
+                                    Some(app.thread_options[idx].title.clone());
+                            }
+                        }
+                        app.status = format!("Loaded {} chats", app.thread_options.len());
+                    } else {
+                        app.status = "Failed parsing /v1/chats response.".to_string();
+                    }
                 }
                 Err(err) => {
                     app.status = format!("Failed to load chats: {err}");
@@ -429,9 +606,35 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
             app.bg_tasks = app.bg_tasks.saturating_sub(1);
             match res {
                 Ok(resp) => {
-                    // TODO: Load messages into app.messages
-                    app.status = format!("Loaded {} messages",
-                        resp.json.get("messages").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0));
+                    if let Some(items) = resp.json.get("messages").and_then(|v| v.as_array()) {
+                        let parsed = items
+                            .iter()
+                            .filter_map(|item| {
+                                let role = match item.get("role").and_then(|v| v.as_str()) {
+                                    Some("user") => ChatRole::User,
+                                    Some("assistant") => ChatRole::Assistant,
+                                    Some("system") | Some("tool") => ChatRole::System,
+                                    _ => return None,
+                                };
+                                let content = item
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())?
+                                    .to_string();
+                                Some(ChatMsg {
+                                    role,
+                                    content,
+                                    sendable: role != ChatRole::System,
+                                })
+                            })
+                            .collect::<Vec<ChatMsg>>();
+
+                        app.messages = parsed;
+                        app.status = format!("Loaded {} messages", app.messages.len());
+                    } else {
+                        app.status = "Failed parsing /v1/messages response.".to_string();
+                    }
                 }
                 Err(err) => {
                     app.status = format!("Failed to load messages: {err}");

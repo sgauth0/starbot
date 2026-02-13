@@ -3,7 +3,13 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { runTriage } from '../services/triage/index.js';
-import { getBestModelForTier } from '../services/model-catalog.js';
+import {
+  getBestModelForTier,
+  getModelById,
+  getModelByProviderAndName,
+  listModels,
+  type ModelDefinition,
+} from '../services/model-catalog.js';
 import { getProvider } from '../providers/index.js';
 
 const RunChatSchema = z.object({
@@ -17,6 +23,85 @@ interface RunParams {
   Params: {
     chatId: string;
   };
+}
+
+const KNOWN_PROVIDERS = new Set(['kimi', 'vertex', 'azure', 'bedrock', 'cloudflare']);
+
+function parseModelPrefs(raw?: string): { provider?: string; model?: string } {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return {};
+  if (trimmed.includes(':')) {
+    const [providerRaw, modelRaw] = trimmed.split(':', 2);
+    const provider = providerRaw.trim().toLowerCase();
+    const model = modelRaw.trim();
+    return {
+      provider: provider || undefined,
+      model: model || undefined,
+    };
+  }
+  const lower = trimmed.toLowerCase();
+  if (KNOWN_PROVIDERS.has(lower)) {
+    return { provider: lower };
+  }
+  return { model: trimmed };
+}
+
+function sortByCost(models: ModelDefinition[]): ModelDefinition[] {
+  return [...models].sort((a, b) => {
+    const aCost = a.costPer1kInput || Number.POSITIVE_INFINITY;
+    const bCost = b.costPer1kInput || Number.POSITIVE_INFINITY;
+    return aCost - bCost;
+  });
+}
+
+async function resolveRequestedModel(
+  tier: number,
+  capability: string,
+  modelPrefs?: string,
+): Promise<ModelDefinition | null> {
+  const prefs = parseModelPrefs(modelPrefs);
+
+  if (prefs.model) {
+    if (prefs.provider) {
+      const exact = await getModelByProviderAndName(prefs.provider, prefs.model);
+      if (exact && exact.status === 'enabled') return exact;
+    }
+
+    const byId = await getModelById(prefs.model);
+    if (byId && byId.status === 'enabled' && (!prefs.provider || byId.provider === prefs.provider)) {
+      return byId;
+    }
+
+    const all = await listModels({
+      status: 'enabled',
+      capability,
+      configuredOnly: true,
+      ...(prefs.provider ? { provider: prefs.provider } : {}),
+    });
+    const byDeployment = all.find(m => m.deploymentName === prefs.model);
+    if (byDeployment) return byDeployment;
+  }
+
+  if (prefs.provider) {
+    const atTier = await listModels({
+      status: 'enabled',
+      tier,
+      capability,
+      configuredOnly: true,
+      provider: prefs.provider,
+    });
+    if (atTier.length > 0) return sortByCost(atTier)[0];
+
+    const anyTier = await listModels({
+      status: 'enabled',
+      capability,
+      configuredOnly: true,
+      provider: prefs.provider,
+    });
+    if (anyTier.length > 0) return sortByCost(anyTier)[0];
+  }
+
+  return getBestModelForTier(tier, capability, true);
 }
 
 export async function generationRoutes(server: FastifyInstance) {
@@ -75,8 +160,8 @@ export async function generationRoutes(server: FastifyInstance) {
       const tierMap = { quick: 1, standard: 2, deep: 3 };
       const tier = tierMap[lane];
 
-      // 3. Select model from catalog
-      const selectedModel = await getBestModelForTier(tier, 'text', true);
+      // 3. Select model from catalog (respect optional explicit preference)
+      const selectedModel = await resolveRequestedModel(tier, 'text', body.model_prefs);
 
       if (!selectedModel) {
         throw new Error('No models available. Please configure at least one provider.');
@@ -140,7 +225,8 @@ export async function generationRoutes(server: FastifyInstance) {
         role: 'assistant',
         content: fullResponse,
         provider: selectedModel.provider,
-        model: selectedModel.displayName,
+        model: selectedModel.deploymentName,
+        modelDisplayName: selectedModel.displayName,
         usage: {
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,

@@ -1,7 +1,7 @@
 // Model Catalog for Starbot_API
 // Defines all available models across providers with capabilities, tiers, and costs
 
-import { isProviderConfigured } from '../env.js';
+import { env, isProviderConfigured } from '../env.js';
 
 export interface ModelDefinition {
   id: string;                    // Unique identifier
@@ -325,6 +325,16 @@ export async function listModels(options: ListModelsOptions = {}): Promise<Model
 
   if (options.configuredOnly) {
     filtered = filtered.filter(m => isProviderConfigured(m.provider));
+  }
+
+  // Optional provider-specific deployment allow-lists.
+  if (env.VERTEX_ALLOWED_MODELS.length > 0) {
+    const allowed = new Set(env.VERTEX_ALLOWED_MODELS.map(s => s.toLowerCase()));
+    filtered = filtered.filter(m => m.provider !== 'vertex' || allowed.has(m.deploymentName.toLowerCase()));
+  }
+  if (env.AZURE_ALLOWED_DEPLOYMENTS.length > 0) {
+    const allowed = new Set(env.AZURE_ALLOWED_DEPLOYMENTS.map(s => s.toLowerCase()));
+    filtered = filtered.filter(m => m.provider !== 'azure' || allowed.has(m.deploymentName.toLowerCase()));
   }
 
   return filtered;

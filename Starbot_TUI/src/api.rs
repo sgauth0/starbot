@@ -249,6 +249,26 @@ impl ApiClient {
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut current_event = String::new();
+            let mut current_data_lines: Vec<String> = Vec::new();
+
+            let flush_event = |event_type: &mut String, data_lines: &mut Vec<String>| {
+                if data_lines.is_empty() {
+                    event_type.clear();
+                    return;
+                }
+                let kind = if event_type.trim().is_empty() {
+                    "message".to_string()
+                } else {
+                    event_type.trim().to_string()
+                };
+                let data = data_lines.join("\n");
+                let _ = tx.send(StreamEvent {
+                    event_type: kind,
+                    data,
+                });
+                data_lines.clear();
+                event_type.clear();
+            };
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
@@ -258,21 +278,16 @@ impl ApiClient {
 
                             // Process complete lines
                             while let Some(newline_pos) = buffer.find('\n') {
-                                let line = buffer[..newline_pos].trim().to_string();
+                                let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
                                 buffer = buffer[newline_pos + 1..].to_string();
 
                                 if line.is_empty() {
-                                    // Empty line signals end of event
-                                    current_event.clear();
-                                } else if let Some(event_type) = line.strip_prefix("event: ") {
-                                    current_event = event_type.to_string();
-                                } else if let Some(data) = line.strip_prefix("data: ") {
-                                    if !current_event.is_empty() {
-                                        let _ = tx.send(StreamEvent {
-                                            event_type: current_event.clone(),
-                                            data: data.to_string(),
-                                        });
-                                    }
+                                    // Empty line signals end of event.
+                                    flush_event(&mut current_event, &mut current_data_lines);
+                                } else if let Some(event_type) = line.strip_prefix("event:") {
+                                    current_event = event_type.trim().to_string();
+                                } else if let Some(data) = line.strip_prefix("data:") {
+                                    current_data_lines.push(data.trim_start().to_string());
                                 }
                             }
                         }
@@ -280,6 +295,9 @@ impl ApiClient {
                     Err(_) => break,
                 }
             }
+
+            // Flush trailing buffered event if the server closed without a blank line.
+            flush_event(&mut current_event, &mut current_data_lines);
         });
 
         Ok(rx)

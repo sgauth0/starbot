@@ -46,6 +46,15 @@ pub fn handle_key(
 ) -> Result<(), CliError> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+    // Global model picker shortcut across all modes.
+    if key.code == KeyCode::F(2) {
+        app.choice_prompt = None;
+        app.text_prompt = None;
+        app.pending_tool = None;
+        app.mode = Mode::ModelPicker;
+        return Ok(());
+    }
+
     match app.mode {
         Mode::Help => {
             if key.code == KeyCode::Esc
@@ -458,7 +467,7 @@ pub fn handle_key(
             if app.thread_options.is_empty() {
                 app.status = "Loading threads...".to_string();
                 app.bg_tasks = app.bg_tasks.saturating_add(1);
-                spawn_threads_fetch(api.clone(), tx.clone());
+                spawn_threads_fetch(api.clone(), tx.clone(), app.selected_workspace_id.clone());
             }
             app.mode = Mode::ThreadPicker;
         }
@@ -529,7 +538,16 @@ pub fn handle_key(
             let model = app.selected_model.clone();
             let messages = app.messages.clone();
             let workspace_id = app.selected_workspace_id.clone();
-            spawn_chat_request_stream_legacy(api.clone(), tx.clone(), provider, model, messages, workspace_id);
+            let active_thread_id = app.active_thread_id.clone();
+            spawn_chat_request_stream_legacy(
+                api.clone(),
+                tx.clone(),
+                provider,
+                model,
+                messages,
+                workspace_id,
+                active_thread_id,
+            );
         }
         KeyCode::Backspace => {
             if app.cursor > 0 && app.cursor <= app.input.len() {
@@ -616,6 +634,12 @@ fn apply_workspace_selection(app: &mut App, workspace_id: &str, name_hint: Optio
         }
     }
 
+    // Workspace switch invalidates cached thread/chat selection.
+    app.thread_options.clear();
+    app.thread_state.select(None);
+    app.active_thread_id = None;
+    app.active_thread_title = None;
+
     if let Some(p) = profile_mut(&mut app.config, &app.profile) {
         p.workspace_id = Some(ws.to_string());
         if let Err(e) = save_config(&app.config) {
@@ -662,7 +686,16 @@ fn retry_last_chat(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mu
     let model = app.selected_model.clone();
     let messages = app.messages.clone();
     let workspace_id = app.selected_workspace_id.clone();
-    spawn_chat_request_stream_legacy(api.clone(), tx.clone(), provider, model, messages, workspace_id);
+    let active_thread_id = app.active_thread_id.clone();
+    spawn_chat_request_stream_legacy(
+        api.clone(),
+        tx.clone(),
+        provider,
+        model,
+        messages,
+        workspace_id,
+        active_thread_id,
+    );
 }
 
 fn send_chat_text(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mut App, text: String) {
@@ -697,5 +730,14 @@ fn send_chat_text(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mut
     let model = app.selected_model.clone();
     let messages = app.messages.clone();
     let workspace_id = app.selected_workspace_id.clone();
-    spawn_chat_request_stream_legacy(api.clone(), tx.clone(), provider, model, messages, workspace_id);
+    let active_thread_id = app.active_thread_id.clone();
+    spawn_chat_request_stream_legacy(
+        api.clone(),
+        tx.clone(),
+        provider,
+        model,
+        messages,
+        workspace_id,
+        active_thread_id,
+    );
 }

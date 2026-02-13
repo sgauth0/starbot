@@ -15,11 +15,19 @@ export const env = {
   VERTEX_PROJECT_ID: process.env.VERTEX_PROJECT_ID || '',
   VERTEX_LOCATION: process.env.VERTEX_LOCATION || 'us-central1',
   GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
+  VERTEX_ALLOWED_MODELS: (process.env.VERTEX_ALLOWED_MODELS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
 
   // Azure AI Services
   AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT || '',
   AZURE_OPENAI_API_KEY: process.env.AZURE_OPENAI_API_KEY || '',
   AZURE_OPENAI_MODELS: (process.env.AZURE_OPENAI_MODELS || '').split(',').filter(Boolean),
+  AZURE_ALLOWED_DEPLOYMENTS: (process.env.AZURE_ALLOWED_DEPLOYMENTS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
 
   // AWS Bedrock
   AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || '',
@@ -38,6 +46,7 @@ export const env = {
   TOOLS_ENABLED: process.env.TOOLS_ENABLED !== 'false', // Default true
   WEB_SEARCH_ENABLED: process.env.WEB_SEARCH_ENABLED === 'true',
   WEB_SEARCH_API_KEY: process.env.WEB_SEARCH_API_KEY || '',
+  BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || '',
 
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
@@ -49,7 +58,7 @@ export function isProviderConfigured(provider: string): boolean {
     case 'kimi':
       return !!env.MOONSHOT_API_KEY;
     case 'vertex':
-      return !!env.VERTEX_PROJECT_ID && !!env.GOOGLE_APPLICATION_CREDENTIALS;
+      return !!env.VERTEX_PROJECT_ID;
     case 'azure':
       return !!env.AZURE_OPENAI_ENDPOINT && !!env.AZURE_OPENAI_API_KEY;
     case 'bedrock':
