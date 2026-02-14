@@ -11,6 +11,7 @@ import {
   type ModelDefinition,
 } from '../services/model-catalog.js';
 import { getProvider } from '../providers/index.js';
+import { getRelevantContext } from '../services/retrieval.js';
 
 const RunChatSchema = z.object({
   mode: z.enum(['quick', 'standard', 'deep']).optional().default('standard'),
@@ -118,6 +119,8 @@ export async function generationRoutes(server: FastifyInstance) {
           orderBy: { createdAt: 'asc' },
           take: 50, // Last 50 messages for context
         },
+        project: true,
+        workspace: true,
       },
     });
 
@@ -137,14 +140,31 @@ export async function generationRoutes(server: FastifyInstance) {
     };
 
     try {
-      sendEvent('status', { message: 'Running triage...' });
-
-      // 1. Run triage on last user message
+      // 0. Get last user message for memory retrieval
       const lastUserMsg = chat.messages.filter(m => m.role === 'user').pop();
       if (!lastUserMsg) {
         throw new Error('No user message found in chat');
       }
 
+      // 1. Retrieve relevant memory context
+      sendEvent('status', { message: 'Retrieving relevant memory...' });
+
+      let memoryContext = '';
+      try {
+        memoryContext = await getRelevantContext(
+          lastUserMsg.content,
+          chat.projectId,
+          chat.workspaceId || undefined,
+          5 // Top 5 most relevant chunks
+        );
+      } catch (err) {
+        server.log.warn('Memory retrieval failed:', err);
+        // Continue without memory if retrieval fails
+      }
+
+      sendEvent('status', { message: 'Running triage...' });
+
+      // 2. Run triage on last user message
       const triageResult = runTriage({
         user_message: lastUserMsg.content,
         mode: body.mode,
@@ -156,11 +176,11 @@ export async function generationRoutes(server: FastifyInstance) {
         message: `Routing (${category}/${lane}, complexity: ${complexity})...`,
       });
 
-      // 2. Map lane to tier (quick=1, standard=2, deep=3)
+      // 3. Map lane to tier (quick=1, standard=2, deep=3)
       const tierMap = { quick: 1, standard: 2, deep: 3 };
       const tier = tierMap[lane];
 
-      // 3. Select model from catalog (respect optional explicit preference)
+      // 4. Select model from catalog (respect optional explicit preference)
       const selectedModel = await resolveRequestedModel(tier, 'text', body.model_prefs);
 
       if (!selectedModel) {
@@ -171,16 +191,27 @@ export async function generationRoutes(server: FastifyInstance) {
         message: `Using ${selectedModel.displayName} (${selectedModel.provider})...`,
       });
 
-      // 4. Get provider
+      // 5. Get provider
       const provider = getProvider(selectedModel.provider);
 
-      // 5. Convert messages to provider format
-      const providerMessages = chat.messages.map(m => ({
+      // 6. Convert messages to provider format and inject memory
+      const providerMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+
+      // Inject memory context as system message if available
+      if (memoryContext) {
+        providerMessages.push({
+          role: 'system',
+          content: memoryContext,
+        });
+      }
+
+      // Add conversation messages
+      providerMessages.push(...chat.messages.map(m => ({
         role: m.role as 'user' | 'assistant' | 'system',
         content: m.content,
-      }));
+      })));
 
-      // 6. Stream response from provider
+      // 7. Stream response from provider
       let fullResponse = '';
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
@@ -199,7 +230,7 @@ export async function generationRoutes(server: FastifyInstance) {
         }
       }
 
-      // 7. Save assistant message
+      // 8. Save assistant message
       const assistantMessage = await prisma.message.create({
         data: {
           chatId,
@@ -208,7 +239,7 @@ export async function generationRoutes(server: FastifyInstance) {
         },
       });
 
-      // 8. Update chat title if needed
+      // 9. Update chat title if needed
       await prisma.chat.update({
         where: { id: chatId },
         data: {
@@ -219,7 +250,7 @@ export async function generationRoutes(server: FastifyInstance) {
         },
       });
 
-      // 9. Send final event
+      // 10. Send final event
       sendEvent('message.final', {
         id: assistantMessage.id,
         role: 'assistant',

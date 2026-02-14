@@ -1,7 +1,24 @@
 import { api } from '../api';
-import { Message, MessageSchema, SendMessageRequest } from '../types';
+import { Message, MessageSchema } from '../types';
+import { z } from 'zod';
+
+// API response wrapper schema
+const MessageResponseSchema = z.object({
+  message: MessageSchema,
+});
 
 export const messagesApi = {
-  send: (data: SendMessageRequest) => api.post<Message>('/messages', data, MessageSchema),
-  update: (id: string, data: Partial<Message>) => api.put<Message>(`/messages/${id}`, data, MessageSchema),
+  send: async (chatId: string, content: string, role: 'user' | 'assistant' | 'system' = 'user') => {
+    const response = await api.post(
+      `/chats/${chatId}/messages`,
+      { role, content },
+      MessageResponseSchema
+    );
+    return response.message;
+  },
+
+  update: async (id: string, data: Partial<Message>) => {
+    const response = await api.put(`/messages/${id}`, data, MessageResponseSchema);
+    return response.message;
+  },
 };

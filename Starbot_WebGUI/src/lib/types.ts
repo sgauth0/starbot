@@ -26,7 +26,7 @@ export const MessageSchema = z.object({
 });
 
 export const SettingsSchema = z.object({
-  mode: z.enum(['standard', 'thorough', 'deep']),
+  mode: z.enum(['quick', 'standard', 'deep']),
   autoRun: z.boolean(),
   speed: z.enum(['fast', 'quality']),
 });

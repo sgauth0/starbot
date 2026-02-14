@@ -3,7 +3,7 @@ use crate::errors::CliError;
 
 pub async fn handle(runtime: &Runtime) -> Result<(), CliError> {
     let api = runtime.api_client()?;
-    let res = api.get_json("/health", None, false).await?;
+    let res = api.get_json("/v1/health", None, false).await?;
     runtime.output.print_verbose(&format!(
         "request_id={:?} elapsed_ms={}",
         res.request_id, res.elapsed_ms

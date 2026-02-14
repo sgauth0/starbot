@@ -1,4 +1,4 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3737/v1';
 export const API_TOKEN_HEADER = 'X-API-Token';
 
 export const getApiToken = () => {

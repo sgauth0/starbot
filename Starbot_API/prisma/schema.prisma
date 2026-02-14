@@ -17,23 +17,44 @@ model Project {
   createdAt  DateTime @default(now())
 
   chats      Chat[]
+  workspaces Workspace[]
+  memories   MemoryDocument[]
 
   @@map("projects")
 }
 
-// Chat: conversation thread within a project
-model Chat {
-  id         String   @id @default(uuid())
-  projectId  String
-  title      String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+// Workspace: represents a code repository, folder, or cloud resource
+model Workspace {
+  id          String   @id @default(uuid())
+  projectId   String
+  type        String   // "repo" | "folder" | "cloud"
+  identifier  String   // repo URL, folder path, or cloud resource ID
+  createdAt   DateTime @default(now())
 
-  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  messages   Message[]
-  events     Event[]
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chats       Chat[]
+  memories    MemoryDocument[]
 
   @@index([projectId])
+  @@map("workspaces")
+}
+
+// Chat: conversation thread within a project
+model Chat {
+  id          String   @id @default(uuid())
+  projectId   String
+  workspaceId String?
+  title       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  events      Event[]
+
+  @@index([projectId])
+  @@index([workspaceId])
   @@index([updatedAt])
   @@map("chats")
 }
@@ -67,4 +88,39 @@ model Event {
   @@index([type])
   @@index([createdAt])
   @@map("events")
+}
+
+// MemoryDocument: stores PMEMORY.md (project) or MEMORY.md (workspace)
+model MemoryDocument {
+  id          String   @id @default(uuid())
+  scope       String   // "project" | "workspace"
+  projectId   String?
+  workspaceId String?
+  content     String   // Markdown content
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  project     Project?   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chunks      MemoryChunk[]
+
+  @@unique([scope, projectId, workspaceId])
+  @@index([scope])
+  @@index([projectId])
+  @@index([workspaceId])
+  @@map("memory_documents")
+}
+
+// MemoryChunk: chunked text from memory documents for embeddings (Phase 3)
+model MemoryChunk {
+  id              String   @id @default(uuid())
+  memoryId        String
+  text            String
+  embeddingVector String?  // JSON-encoded float array (Phase 3)
+  createdAt       DateTime @default(now())
+
+  memory          MemoryDocument @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
+  @@map("memory_chunks")
 }
