@@ -12,8 +12,11 @@ export function ChatView() {
   const queryClient = useQueryClient();
 
   const sendMutation = useMutation({
-    mutationFn: messagesApi.send,
-    onMutate: async (newMsg) => {
+    mutationFn: (content: string) => {
+      if (!selectedChatId) throw new Error('No chat selected');
+      return messagesApi.send(selectedChatId, content, 'user');
+    },
+    onMutate: async (content) => {
         // Optimistic update if needed, but the stream might handle it.
         // For now, we rely on the backend to append the user message or the stream to send it back?
         // Usually, we should optimistically add the user message.
@@ -29,14 +32,14 @@ export function ChatView() {
                 id: 'temp-user',
                 chatId: selectedChatId,
                 role: 'user',
-                content: newMsg.content,
+                content,
                 createdAt: new Date().toISOString(),
             },
         ]);
 
         return { previousMessages };
     },
-    onError: (err, newMsg, context) => {
+    onError: (err, content, context) => {
         if (selectedChatId && context?.previousMessages) {
             queryClient.setQueryData(['messages', selectedChatId], context.previousMessages);
         }
@@ -45,11 +48,7 @@ export function ChatView() {
 
   const handleSend = (content: string) => {
     if (selectedChatId) {
-      sendMutation.mutate({
-        chatId: selectedChatId,
-        content,
-        settings // Pass settings (mode, speed, etc)
-      });
+      sendMutation.mutate(content);
     }
   };
 

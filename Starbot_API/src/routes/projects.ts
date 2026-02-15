@@ -7,6 +7,10 @@ const CreateProjectSchema = z.object({
   name: z.string().min(1).max(255),
 });
 
+const UpdateProjectSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+});
+
 export async function projectRoutes(server: FastifyInstance) {
   // GET /v1/projects - List all projects
   server.get('/projects', async (request, reply) => {
@@ -54,6 +58,22 @@ export async function projectRoutes(server: FastifyInstance) {
     }
 
     return { project };
+  });
+
+  // PUT /v1/projects/:id - Update a project
+  server.put<{ Params: { id: string } }>('/projects/:id', async (request, reply) => {
+    const { id } = request.params;
+    const body = UpdateProjectSchema.parse(request.body);
+
+    try {
+      const project = await prisma.project.update({
+        where: { id },
+        data: body,
+      });
+      return { project };
+    } catch (err) {
+      return reply.code(404).send({ error: 'Project not found' });
+    }
   });
 
   // DELETE /v1/projects/:id - Delete a project

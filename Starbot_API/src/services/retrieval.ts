@@ -3,10 +3,8 @@
  * Performs semantic search using cosine similarity
  */
 
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db.js';
 import { generateEmbedding } from './embeddings.js';
-
-const prisma = new PrismaClient();
 
 export interface RetrievalResult {
   chunkId: string;

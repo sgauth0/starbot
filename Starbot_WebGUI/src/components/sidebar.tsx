@@ -26,21 +26,28 @@ export function Sidebar() {
     queryFn: projectsApi.list,
   });
 
+  // Use first project or create default
+  const currentProjectId = projects?.[0]?.id;
+
   const { data: chats } = useQuery({
-    queryKey: ['chats'],
-    queryFn: () => chatsApi.list(),
+    queryKey: ['chats', currentProjectId],
+    queryFn: () => currentProjectId ? chatsApi.list(currentProjectId) : Promise.resolve([]),
+    enabled: !!currentProjectId,
   });
 
   const createChatMutation = useMutation({
-    mutationFn: chatsApi.create,
+    mutationFn: (title: string) => {
+      if (!currentProjectId) throw new Error('No project selected');
+      return chatsApi.create(currentProjectId, { title });
+    },
     onSuccess: (newChat) => {
-      queryClient.invalidateQueries({ queryKey: ['chats'] });
+      queryClient.invalidateQueries({ queryKey: ['chats', currentProjectId] });
       setSelectedChatId(newChat.id);
     },
   });
 
   const handleCreateChat = () => {
-    createChatMutation.mutate({ title: 'New Chat' });
+    createChatMutation.mutate('New Chat');
   };
 
   if (!isSidebarOpen) return null;

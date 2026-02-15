@@ -158,7 +158,7 @@ export async function generationRoutes(server: FastifyInstance) {
           5 // Top 5 most relevant chunks
         );
       } catch (err) {
-        server.log.warn('Memory retrieval failed:', err);
+        server.log.warn({ err }, 'Memory retrieval failed');
         // Continue without memory if retrieval fails
       }
 
@@ -240,13 +240,17 @@ export async function generationRoutes(server: FastifyInstance) {
       });
 
       // 9. Update chat title if needed
+      const newTitle = chat.title === 'New Chat'
+        ? lastUserMsg.content.slice(0, 50) + (lastUserMsg.content.length > 50 ? '...' : '')
+        : chat.title;
+
+      const updatedAt = new Date();
+
       await prisma.chat.update({
         where: { id: chatId },
         data: {
-          updatedAt: new Date(),
-          title: chat.title === 'New Chat'
-            ? lastUserMsg.content.slice(0, 50) + (lastUserMsg.content.length > 50 ? '...' : '')
-            : chat.title,
+          updatedAt,
+          title: newTitle,
         },
       });
 
@@ -273,8 +277,8 @@ export async function generationRoutes(server: FastifyInstance) {
 
       sendEvent('chat.updated', {
         id: chatId,
-        title: chat.title,
-        updatedAt: new Date().toISOString(),
+        title: newTitle,
+        updatedAt: updatedAt.toISOString(),
       });
 
       reply.raw.end();

@@ -1,9 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db.js';
 import { processContent } from '../services/chunking.js';
 import { generateEmbeddingsBatch, areEmbeddingsAvailable } from '../services/embeddings.js';
-
-const prisma = new PrismaClient();
 
 const DEFAULT_PMEMORY = `# Project Memory
 
@@ -50,13 +48,11 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     }
 
     // Find or create memory document
-    let memory = await prisma.memoryDocument.findUnique({
+    let memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'project',
-          projectId,
-          workspaceId: null,
-        },
+        scope: 'project',
+        projectId,
+        workspaceId: null,
       },
     });
 
@@ -96,22 +92,29 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     }
 
     // Upsert memory document
-    const memory = await prisma.memoryDocument.upsert({
+    let memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'project',
-          projectId,
-          workspaceId: null,
-        },
-      },
-      update: { content },
-      create: {
         scope: 'project',
         projectId,
         workspaceId: null,
-        content,
       },
     });
+
+    if (memory) {
+      memory = await prisma.memoryDocument.update({
+        where: { id: memory.id },
+        data: { content },
+      });
+    } else {
+      memory = await prisma.memoryDocument.create({
+        data: {
+          scope: 'project',
+          projectId,
+          workspaceId: null,
+          content,
+        },
+      });
+    }
 
     return {
       memory: {
@@ -136,13 +139,11 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     }
 
     // Find or create memory document
-    let memory = await prisma.memoryDocument.findUnique({
+    let memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'workspace',
-          projectId: null,
-          workspaceId,
-        },
+        scope: 'workspace',
+        projectId: null,
+        workspaceId,
       },
     });
 
@@ -182,22 +183,29 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     }
 
     // Upsert memory document
-    const memory = await prisma.memoryDocument.upsert({
+    let memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'workspace',
-          projectId: null,
-          workspaceId,
-        },
-      },
-      update: { content },
-      create: {
         scope: 'workspace',
         projectId: null,
         workspaceId,
-        content,
       },
     });
+
+    if (memory) {
+      memory = await prisma.memoryDocument.update({
+        where: { id: memory.id },
+        data: { content },
+      });
+    } else {
+      memory = await prisma.memoryDocument.create({
+        data: {
+          scope: 'workspace',
+          projectId: null,
+          workspaceId,
+          content,
+        },
+      });
+    }
 
     return {
       memory: {
@@ -213,13 +221,11 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     const { projectId } = request.params as { projectId: string };
 
     // Get memory document
-    const memory = await prisma.memoryDocument.findUnique({
+    const memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'project',
-          projectId,
-          workspaceId: null,
-        },
+        scope: 'project',
+        projectId,
+        workspaceId: null,
       },
     });
 
@@ -245,23 +251,22 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
       ? await generateEmbeddingsBatch(chunks.map((c) => c.text))
       : chunks.map(() => null);
 
-    // Store chunks with embeddings
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+    // Store chunks with embeddings using bulk insert
+    const chunkData = chunks.map((chunk, i) => {
       const embedding = embeddings[i];
-
-      await prisma.memoryChunk.create({
-        data: {
-          memoryId: memory.id,
-          text: chunk.text,
-          embeddingVector: embedding ? JSON.stringify(embedding) : null,
-        },
-      });
-
       if (embedding) {
         embeddingsGenerated++;
       }
-    }
+      return {
+        memoryId: memory.id,
+        text: chunk.text,
+        embeddingVector: embedding ? JSON.stringify(embedding) : null,
+      };
+    });
+
+    await prisma.memoryChunk.createMany({
+      data: chunkData,
+    });
 
     return {
       status: 'success',
@@ -275,13 +280,11 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
     const { workspaceId } = request.params as { workspaceId: string };
 
     // Get memory document
-    const memory = await prisma.memoryDocument.findUnique({
+    const memory = await prisma.memoryDocument.findFirst({
       where: {
-        scope_projectId_workspaceId: {
-          scope: 'workspace',
-          projectId: null,
-          workspaceId,
-        },
+        scope: 'workspace',
+        projectId: null,
+        workspaceId,
       },
     });
 
@@ -307,23 +310,22 @@ export const memoryRoutes: FastifyPluginAsync = async (server) => {
       ? await generateEmbeddingsBatch(chunks.map((c) => c.text))
       : chunks.map(() => null);
 
-    // Store chunks with embeddings
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+    // Store chunks with embeddings using bulk insert
+    const chunkData = chunks.map((chunk, i) => {
       const embedding = embeddings[i];
-
-      await prisma.memoryChunk.create({
-        data: {
-          memoryId: memory.id,
-          text: chunk.text,
-          embeddingVector: embedding ? JSON.stringify(embedding) : null,
-        },
-      });
-
       if (embedding) {
         embeddingsGenerated++;
       }
-    }
+      return {
+        memoryId: memory.id,
+        text: chunk.text,
+        embeddingVector: embedding ? JSON.stringify(embedding) : null,
+      };
+    });
+
+    await prisma.memoryChunk.createMany({
+      data: chunkData,
+    });
 
     return {
       status: 'success',

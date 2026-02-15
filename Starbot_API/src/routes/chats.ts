@@ -7,6 +7,10 @@ const CreateChatSchema = z.object({
   title: z.string().min(1).max(255).optional(),
 });
 
+const UpdateChatSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+});
+
 export async function chatRoutes(server: FastifyInstance) {
   // GET /v1/projects/:projectId/chats - List chats in a project
   server.get<{ Params: { projectId: string } }>(
@@ -74,6 +78,22 @@ export async function chatRoutes(server: FastifyInstance) {
     }
 
     return { chat };
+  });
+
+  // PUT /v1/chats/:id - Update a chat
+  server.put<{ Params: { id: string } }>('/chats/:id', async (request, reply) => {
+    const { id } = request.params;
+    const body = UpdateChatSchema.parse(request.body);
+
+    try {
+      const chat = await prisma.chat.update({
+        where: { id },
+        data: body,
+      });
+      return { chat };
+    } catch (err) {
+      return reply.code(404).send({ error: 'Chat not found' });
+    }
   });
 
   // DELETE /v1/chats/:id - Delete a chat

@@ -69,23 +69,23 @@ async fn device_code_flow(runtime: &mut Runtime) -> Result<(), CliError> {
 
     let device_code = res
         .json
-        .get("deviceCode")
+        .get("device_code")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| CliError::Server("Missing deviceCode in response".to_string()))?
+        .ok_or_else(|| CliError::Server("Missing device_code in response".to_string()))?
         .to_string();
 
     let user_code = res
         .json
-        .get("userCode")
+        .get("user_code")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| CliError::Server("Missing userCode in response".to_string()))?
+        .ok_or_else(|| CliError::Server("Missing user_code in response".to_string()))?
         .to_string();
 
     let verification_url = res
         .json
-        .get("verificationUrl")
+        .get("verification_url")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| CliError::Server("Missing verificationUrl in response".to_string()))?
+        .ok_or_else(|| CliError::Server("Missing verification_url in response".to_string()))?
         .to_string();
 
     let interval = res
@@ -109,7 +109,7 @@ async fn device_code_flow(runtime: &mut Runtime) -> Result<(), CliError> {
         .print_human("  Waiting for authorization...");
 
     // 3. Poll loop
-    let poll_body = json!({ "deviceCode": device_code });
+    let poll_body = json!({ "device_code": device_code });
     let max_attempts = 180 / interval; // 3 minutes max
 
     for _ in 0..max_attempts {
@@ -133,13 +133,13 @@ async fn device_code_flow(runtime: &mut Runtime) -> Result<(), CliError> {
             "authorized" => {
                 let access_token = poll_res
                     .json
-                    .get("accessToken")
+                    .get("access_token")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
                 let refresh_token = poll_res
                     .json
-                    .get("refreshToken")
+                    .get("refresh_token")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 

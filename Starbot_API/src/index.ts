@@ -6,7 +6,6 @@ import 'dotenv/config';
 
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import websocket from '@fastify/websocket';
 import { env, logConfiguration } from './env.js';
 import { projectRoutes } from './routes/projects.js';
 import { chatRoutes } from './routes/chats.js';
@@ -16,6 +15,7 @@ import { modelRoutes } from './routes/models.js';
 import { workspaceRoutes } from './routes/workspaces.js';
 import { memoryRoutes } from './routes/memory.js';
 import { authRoutes } from './routes/auth.js';
+import { inferenceRoutes } from './routes/inference.js';
 
 const PORT = env.PORT;
 const HOST = env.HOST;
@@ -33,19 +33,20 @@ const server = Fastify({
   },
 });
 
-// CORS for local development
+// CORS for local development and production
 await server.register(cors, {
   origin: [
     'http://localhost:8080',
     'http://127.0.0.1:8080',
-    'http://localhost:3000',      // WebGUI
-    'http://127.0.0.1:3000'
+    'http://localhost:3000',      // WebGUI (dev)
+    'http://127.0.0.1:3000',
+    'https://starbot.cloud',      // Production
+    'https://www.starbot.cloud',  // Production (www)
+    'http://starbot.cloud',       // Production (HTTP before SSL)
+    'http://www.starbot.cloud',
   ],
   credentials: true,
 });
-
-// WebSocket support for streaming
-await server.register(websocket);
 
 // Main health endpoint with /v1 prefix
 server.get('/v1/health', async () => {
@@ -58,7 +59,7 @@ server.get('/v1/health', async () => {
 
 // Legacy redirect
 server.get('/health', async (request, reply) => {
-  return reply.redirect(301, '/v1/health');
+  return reply.code(301).redirect('/v1/health');
 });
 
 // API routes
@@ -70,6 +71,7 @@ await server.register(modelRoutes, { prefix: '/v1' });
 await server.register(workspaceRoutes, { prefix: '/v1' });
 await server.register(memoryRoutes, { prefix: '/v1' });
 await server.register(authRoutes, { prefix: '/v1' });
+await server.register(inferenceRoutes, { prefix: '/v1' });
 
 // Start server
 try {

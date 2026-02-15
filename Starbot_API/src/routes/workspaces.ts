@@ -1,7 +1,5 @@
 import { FastifyPluginAsync } from 'fastify';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db.js';
 
 export const workspaceRoutes: FastifyPluginAsync = async (server) => {
   // List workspaces for a project

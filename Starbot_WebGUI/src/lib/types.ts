@@ -26,9 +26,10 @@ export const MessageSchema = z.object({
 });
 
 export const SettingsSchema = z.object({
-  mode: z.enum(['quick', 'standard', 'deep']),
-  autoRun: z.boolean(),
-  speed: z.enum(['fast', 'quality']),
+  mode: z.enum(['quick', 'standard', 'deep']).default('standard'),
+  auto: z.boolean().default(true),
+  speed: z.boolean().default(false), // true = fast mode, false = quality mode
+  model_prefs: z.string().optional(),
 });
 
 export type Project = z.infer<typeof ProjectSchema>;

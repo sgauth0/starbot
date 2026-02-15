@@ -65,15 +65,15 @@ export function SettingsPanel() {
             <label className="text-sm font-medium">Execution Speed</label>
             <div className="flex gap-2">
               <Button
-                variant={settings.speed === 'fast' ? 'default' : 'outline'}
-                onClick={() => updateSettings({ speed: 'fast' })}
+                variant={settings.speed === true ? 'default' : 'outline'}
+                onClick={() => updateSettings({ speed: true })}
                 className="flex-1"
               >
                 Fast
               </Button>
               <Button
-                variant={settings.speed === 'quality' ? 'default' : 'outline'}
-                onClick={() => updateSettings({ speed: 'quality' })}
+                variant={settings.speed === false ? 'default' : 'outline'}
+                onClick={() => updateSettings({ speed: false })}
                 className="flex-1"
               >
                 Quality
@@ -83,10 +83,10 @@ export function SettingsPanel() {
 
           <div className="space-y-2">
              <label className="flex items-center gap-2 cursor-pointer">
-                <input 
-                    type="checkbox" 
-                    checked={settings.autoRun}
-                    onChange={(e) => updateSettings({ autoRun: e.target.checked })}
+                <input
+                    type="checkbox"
+                    checked={settings.auto}
+                    onChange={(e) => updateSettings({ auto: e.target.checked })}
                     className="rounded border-slate-300"
                 />
                 <span className="text-sm font-medium">Auto-run Tools</span>

@@ -36,8 +36,8 @@ export const useUIStore = create<UIState>((set) => ({
 
   settings: {
     mode: 'standard',
-    autoRun: true,
-    speed: 'quality',
+    auto: true,
+    speed: false, // false = quality mode, true = fast mode
   },
   updateSettings: (newSettings) => 
     set((state) => ({ settings: { ...state.settings, ...newSettings } })),
