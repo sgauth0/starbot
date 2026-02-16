@@ -1,6 +1,8 @@
 // Environment configuration for Starbot_API
 // Load all provider credentials and settings from environment variables
 
+const strEnv = (value: string | undefined, fallback = '') => (value ?? fallback).trim();
+
 export const env = {
   // Server
   PORT: parseInt(process.env.PORT || '3737', 10),
@@ -8,21 +10,21 @@ export const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
 
   // Kimi/Moonshot
-  MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY || '',
-  MOONSHOT_BASE_URL: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.cn',
+  MOONSHOT_API_KEY: strEnv(process.env.MOONSHOT_API_KEY),
+  MOONSHOT_BASE_URL: strEnv(process.env.MOONSHOT_BASE_URL, 'https://api.moonshot.cn'),
 
   // Google Vertex AI
-  VERTEX_PROJECT_ID: process.env.VERTEX_PROJECT_ID || '',
-  VERTEX_LOCATION: process.env.VERTEX_LOCATION || 'us-central1',
-  GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
+  VERTEX_PROJECT_ID: strEnv(process.env.VERTEX_PROJECT_ID),
+  VERTEX_LOCATION: strEnv(process.env.VERTEX_LOCATION, 'us-central1'),
+  GOOGLE_APPLICATION_CREDENTIALS: strEnv(process.env.GOOGLE_APPLICATION_CREDENTIALS),
   VERTEX_ALLOWED_MODELS: (process.env.VERTEX_ALLOWED_MODELS || '')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean),
 
   // Azure AI Services
-  AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT || '',
-  AZURE_OPENAI_API_KEY: process.env.AZURE_OPENAI_API_KEY || '',
+  AZURE_OPENAI_ENDPOINT: strEnv(process.env.AZURE_OPENAI_ENDPOINT),
+  AZURE_OPENAI_API_KEY: strEnv(process.env.AZURE_OPENAI_API_KEY),
   AZURE_OPENAI_MODELS: (process.env.AZURE_OPENAI_MODELS || '').split(',').filter(Boolean),
   AZURE_ALLOWED_DEPLOYMENTS: (process.env.AZURE_ALLOWED_DEPLOYMENTS || '')
     .split(',')
@@ -30,14 +32,14 @@ export const env = {
     .filter(Boolean),
 
   // AWS Bedrock
-  AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || '',
-  AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || '',
-  AWS_REGION: process.env.AWS_REGION || process.env.BEDROCK_REGION || 'us-east-1',
-  BEDROCK_REGION: process.env.BEDROCK_REGION || 'us-east-1',
+  AWS_ACCESS_KEY_ID: strEnv(process.env.AWS_ACCESS_KEY_ID),
+  AWS_SECRET_ACCESS_KEY: strEnv(process.env.AWS_SECRET_ACCESS_KEY),
+  AWS_REGION: strEnv(process.env.AWS_REGION || process.env.BEDROCK_REGION, 'us-east-1'),
+  BEDROCK_REGION: strEnv(process.env.BEDROCK_REGION, 'us-east-1'),
 
   // Cloudflare Workers AI
-  CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID || '',
-  CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN || '',
+  CLOUDFLARE_ACCOUNT_ID: strEnv(process.env.CLOUDFLARE_ACCOUNT_ID),
+  CLOUDFLARE_API_TOKEN: strEnv(process.env.CLOUDFLARE_API_TOKEN),
 
   // Triage
   TRIAGE_MODEL_ENABLED: process.env.TRIAGE_MODEL_ENABLED === 'true',

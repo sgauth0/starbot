@@ -256,8 +256,13 @@ export async function generationRoutes(server: FastifyInstance) {
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       let selectedModel: ModelDefinition | null = null;
       let lastProviderError: unknown = null;
+      const blockedProviders = new Set<string>();
 
       for (const candidate of candidateModels) {
+        if (blockedProviders.has(candidate.provider)) {
+          continue;
+        }
+
         sendEvent('status', {
           message: `Using ${candidate.displayName} (${candidate.provider})...`,
         });
@@ -292,6 +297,10 @@ export async function generationRoutes(server: FastifyInstance) {
           break;
         } catch (err) {
           lastProviderError = err;
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          if (/(googleautherror|invalid authentication|unauthorized|no route for that uri|not configured|api key|403|401)/i.test(errorMessage)) {
+            blockedProviders.add(candidate.provider);
+          }
           server.log.warn(
             { err, provider: candidate.provider, model: candidate.deploymentName },
             'Model run failed, trying fallback',

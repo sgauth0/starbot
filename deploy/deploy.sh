@@ -18,6 +18,9 @@ PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 API_DIR="$PROJECT_ROOT/Starbot_API"
 API_RUNTIME_USER="stella"
 API_RUNTIME_GROUP="stella"
+API_RUNTIME_ENV_FILE="$API_DIR/.env.runtime"
+VERTEX_ADC_RUNTIME_DIR="/home/$API_RUNTIME_USER/.config/starbot"
+VERTEX_ADC_RUNTIME_PATH="$VERTEX_ADC_RUNTIME_DIR/vertex-adc.json"
 WEBGUI_DEPLOY_ROOT="/var/www/sites/stella/starbot.cloud"
 WEBGUI_DEPLOY_DIR="$WEBGUI_DEPLOY_ROOT/Starbot_WebGUI"
 WEBGUI_DOCKER_CONTAINER="docklite-site-starbot-web"
@@ -52,6 +55,41 @@ if [ ! -f "$API_DIR/dist/index.js" ]; then
 fi
 
 echo -e "${GREEN}✅ API built successfully${NC}"
+
+# Step 1.5: Prepare provider runtime environment overrides
+echo -e "\n${GREEN}1️⃣.5  Preparing provider runtime config...${NC}"
+sudo rm -f "$API_RUNTIME_ENV_FILE"
+
+if [ -f "$API_DIR/.env" ]; then
+    ADC_SOURCE_PATH="$(sudo -u "$API_RUNTIME_USER" bash -lc "
+      cd '$API_DIR'
+      set -a
+      # shellcheck disable=SC1091
+      source ./.env >/dev/null 2>&1 || true
+      set +a
+      printf '%s' \"\${GOOGLE_APPLICATION_CREDENTIALS:-}\"
+    ")"
+
+    if [ -n "$ADC_SOURCE_PATH" ] && [ -f "$ADC_SOURCE_PATH" ]; then
+        echo -e "${YELLOW}Preparing readable Vertex ADC for $API_RUNTIME_USER...${NC}"
+        sudo mkdir -p "$VERTEX_ADC_RUNTIME_DIR"
+        sudo cp "$ADC_SOURCE_PATH" "$VERTEX_ADC_RUNTIME_PATH"
+        sudo chown "$API_RUNTIME_USER:$API_RUNTIME_GROUP" "$VERTEX_ADC_RUNTIME_PATH"
+        sudo chmod 600 "$VERTEX_ADC_RUNTIME_PATH"
+
+        {
+            echo "GOOGLE_APPLICATION_CREDENTIALS=$VERTEX_ADC_RUNTIME_PATH"
+        } | sudo tee "$API_RUNTIME_ENV_FILE" >/dev/null
+
+        sudo chown "$API_RUNTIME_USER:$API_RUNTIME_GROUP" "$API_RUNTIME_ENV_FILE"
+        sudo chmod 600 "$API_RUNTIME_ENV_FILE"
+        echo -e "${GREEN}✅ Runtime provider override prepared${NC}"
+    else
+        echo -e "${YELLOW}ℹ️  No readable GOOGLE_APPLICATION_CREDENTIALS source found; skipping override${NC}"
+    fi
+else
+    echo -e "${YELLOW}ℹ️  No API .env file found; skipping provider runtime override${NC}"
+fi
 
 # Step 2: Sync + Build WebGUI in /var/www
 echo -e "\n${GREEN}2️⃣  Syncing and building WebGUI...${NC}"
@@ -230,19 +268,29 @@ fi
 if sudo docker ps -a --format '{{.Names}}' | grep -Fxq "docklite_caddy"; then
     echo -e "${YELLOW}Reloading Docklite Caddy...${NC}"
     sudo docker restart docklite_caddy >/dev/null
+    if ! sudo docker inspect docklite_caddy --format '{{json .NetworkSettings.Networks}}' | grep -q 'docklite_network'; then
+        echo -e "${YELLOW}Docklite Caddy not attached to docklite_network. Reconnecting...${NC}"
+        sudo docker network connect docklite_network docklite_caddy || true
+    fi
     echo -e "${GREEN}✅ Docklite Caddy restarted${NC}"
 fi
 
 echo -e "${YELLOW}Reloading nginx...${NC}"
-if sudo systemctl is-active --quiet nginx; then
-    sudo systemctl reload nginx
-    echo -e "${GREEN}✅ Nginx reloaded${NC}"
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    echo -e "${YELLOW}Docker WebGUI mode detected; stopping nginx to avoid conflicts with Docklite Caddy on :80/:443...${NC}"
+    sudo systemctl stop nginx >/dev/null 2>&1 || true
+    echo -e "${GREEN}✅ nginx stopped (Caddy owns public ports)${NC}"
 else
-    echo -e "${YELLOW}⚠️  nginx service is not active. Attempting to start nginx...${NC}"
-    if sudo systemctl start nginx; then
-        echo -e "${GREEN}✅ Nginx started${NC}"
+    if sudo systemctl is-active --quiet nginx; then
+        sudo systemctl reload nginx
+        echo -e "${GREEN}✅ Nginx reloaded${NC}"
     else
-        echo -e "${YELLOW}⚠️  Could not start nginx. Continuing with API/WebGUI deployment.${NC}"
+        echo -e "${YELLOW}⚠️  nginx service is not active. Attempting to start nginx...${NC}"
+        if sudo systemctl start nginx; then
+            echo -e "${GREEN}✅ Nginx started${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Could not start nginx. Continuing with API/WebGUI deployment.${NC}"
+        fi
     fi
 fi
 

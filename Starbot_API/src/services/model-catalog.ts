@@ -75,7 +75,7 @@ const MODELS: ModelDefinition[] = [
   {
     id: 'cf-mistral-small',
     provider: 'cloudflare',
-    deploymentName: '@mistralai/mistral-small-3.1-24b-v1',
+    deploymentName: '@cf/mistralai/mistral-small-3.1-24b-instruct',
     displayName: 'Mistral Small 3.1 (24B)',
     tier: 1,
     capabilities: ['text', 'streaming'],
@@ -282,7 +282,7 @@ const MODELS: ModelDefinition[] = [
   {
     id: 'cf-qwen-coder',
     provider: 'cloudflare',
-    deploymentName: '@qwen/qwen2.5-coder-32b-instruct',
+    deploymentName: '@cf/qwen/qwen2.5-coder-32b-instruct',
     displayName: 'Qwen 2.5 Coder (32B)',
     tier: 2,
     capabilities: ['text', 'streaming'],
