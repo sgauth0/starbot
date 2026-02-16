@@ -21,4 +21,12 @@ export const messagesApi = {
     const response = await api.put(`/messages/${id}`, data, MessageResponseSchema);
     return response.message;
   },
+
+  delete: async (id: string) => {
+    await api.delete(`/messages/${id}`);
+  },
+
+  deleteAfter: async (chatId: string, messageId: string) => {
+    await api.delete(`/chats/${chatId}/messages/after/${messageId}`);
+  },
 };

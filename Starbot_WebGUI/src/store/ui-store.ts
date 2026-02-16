@@ -6,9 +6,15 @@ interface UIState {
   setSelectedChatId: (id: string | null) => void;
 
   isSettingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
   toggleSettings: () => void;
 
   isLogsOpen: boolean;
+  setLogsOpen: (open: boolean) => void;
+  openLogs: () => void;
+  closeLogs: () => void;
   toggleLogs: () => void;
   
   isSidebarOpen: boolean;
@@ -26,9 +32,15 @@ export const useUIStore = create<UIState>((set) => ({
   setSelectedChatId: (id) => set({ selectedChatId: id }),
 
   isSettingsOpen: false,
+  setSettingsOpen: (open) => set({ isSettingsOpen: open }),
+  openSettings: () => set({ isSettingsOpen: true }),
+  closeSettings: () => set({ isSettingsOpen: false }),
   toggleSettings: () => set((state) => ({ isSettingsOpen: !state.isSettingsOpen })),
 
   isLogsOpen: false,
+  setLogsOpen: (open) => set({ isLogsOpen: open }),
+  openLogs: () => set({ isLogsOpen: true }),
+  closeLogs: () => set({ isLogsOpen: false }),
   toggleLogs: () => set((state) => ({ isLogsOpen: !state.isLogsOpen })),
 
   isSidebarOpen: true,

@@ -28,7 +28,13 @@ export async function projectRoutes(server: FastifyInstance) {
 
   // POST /v1/projects - Create a new project
   server.post('/projects', async (request, reply) => {
-    const body = CreateProjectSchema.parse(request.body);
+    const parsed = CreateProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Invalid request body',
+      });
+    }
+    const body = parsed.data;
 
     const project = await prisma.project.create({
       data: {
@@ -63,7 +69,13 @@ export async function projectRoutes(server: FastifyInstance) {
   // PUT /v1/projects/:id - Update a project
   server.put<{ Params: { id: string } }>('/projects/:id', async (request, reply) => {
     const { id } = request.params;
-    const body = UpdateProjectSchema.parse(request.body);
+    const parsed = UpdateProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'Invalid request body',
+      });
+    }
+    const body = parsed.data;
 
     try {
       const project = await prisma.project.update({

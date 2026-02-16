@@ -3,7 +3,7 @@
 ## TL;DR - One Command Deployment
 
 ```bash
-cd ~/projects/starbot/deploy
+cd /var/www/sites/stella/starbot.cloud/deploy
 ./deploy.sh
 ```
 
@@ -19,17 +19,24 @@ This script will:
 
 ## Manual Deployment (Step by Step)
 
+### 0. One-Time System User Setup
+
+```bash
+sudo useradd -r -s /bin/false starbot || true
+sudo chown -R starbot:starbot /var/www/sites/stella/starbot.cloud
+```
+
 ### 1. Build Applications
 
 ```bash
 # Build API
-cd ~/projects/starbot/Starbot_API
-npm install
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
+npm ci
 npm run build
 
 # Build WebGUI
-cd ~/projects/starbot/Starbot_WebGUI
-npm install
+cd /var/www/sites/stella/starbot.cloud/Starbot_WebGUI
+npm ci
 npm run build
 ```
 
@@ -37,7 +44,7 @@ npm run build
 
 ```bash
 # Create API .env file
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 cat > .env << 'EOF'
 NODE_ENV=production
 PORT=3737
@@ -53,7 +60,7 @@ chmod 600 .env
 
 ```bash
 # Copy systemd files
-sudo cp ~/projects/starbot/deploy/*.service /etc/systemd/system/
+sudo cp /var/www/sites/stella/starbot.cloud/deploy/*.service /etc/systemd/system/
 
 # Reload and enable
 sudo systemctl daemon-reload
@@ -65,7 +72,7 @@ sudo systemctl start starbot-api starbot-webgui
 
 ```bash
 # Copy nginx config
-sudo cp ~/projects/starbot/deploy/nginx-starbot.cloud.conf \
+sudo cp /var/www/sites/stella/starbot.cloud/deploy/nginx-starbot.cloud.conf \
   /etc/nginx/sites-available/starbot.cloud
 
 # Enable site
@@ -94,7 +101,7 @@ sudo systemctl status starbot-webgui
 
 # Test endpoints
 curl http://localhost:3737/v1/health
-curl http://localhost:3000
+curl http://localhost:3001
 
 # Test via domain
 curl http://starbot.cloud/v1/health
@@ -115,7 +122,7 @@ sudo systemctl restart starbot-webgui
 sudo systemctl reload nginx
 
 # Update after code changes
-cd ~/projects/starbot
+cd /var/www/sites/stella/starbot.cloud
 git pull
 cd Starbot_API && npm run build
 cd ../Starbot_WebGUI && npm run build
@@ -129,20 +136,20 @@ sudo systemctl restart starbot-api starbot-webgui
 ```
 Internet → Nginx (port 80/443)
              ├─→ /v1/* → API (localhost:3737)
-             └─→ /* → WebGUI (localhost:3000)
+             └─→ /* → WebGUI (localhost:3001)
 ```
 
 **Ports:**
 - **80/443** - Nginx (public)
-- **3000** - Next.js WebGUI (localhost only)
+- **3001** - Next.js WebGUI (localhost only)
 - **3737** - Fastify API (localhost only)
 
 **Files:**
 - `/etc/nginx/sites-enabled/starbot.cloud` - Nginx config
 - `/etc/systemd/system/starbot-api.service` - API service
 - `/etc/systemd/system/starbot-webgui.service` - WebGUI service
-- `/home/stella/projects/starbot/starbot.db` - SQLite database
-- `/home/stella/projects/starbot/Starbot_API/.env` - API secrets
+- `/var/www/sites/stella/starbot.cloud/starbot.db` - SQLite database
+- `/var/www/sites/stella/starbot.cloud/Starbot_API/.env` - API secrets
 
 ---
 
@@ -157,7 +164,7 @@ sudo journalctl -u starbot-webgui -n 100
 ### Port conflicts
 ```bash
 sudo lsof -i :3737  # Check API port
-sudo lsof -i :3000  # Check WebGUI port
+sudo lsof -i :3001  # Check WebGUI port
 ```
 
 ### 502 Bad Gateway
@@ -167,7 +174,7 @@ sudo lsof -i :3000  # Check WebGUI port
 ### Database errors
 ```bash
 # Rebuild database
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 npx prisma db push
 ```
 
@@ -178,7 +185,7 @@ npx prisma db push
 - [ ] SSL certificate installed (run certbot)
 - [ ] `.env` file permissions set to 600
 - [ ] Services only listen on localhost (not 0.0.0.0)
-- [ ] Firewall allows 80/443, blocks 3000/3737
+- [ ] Firewall allows 80/443, blocks 3001/3737
 - [ ] API keys stored in .env (never in code)
 
 ---

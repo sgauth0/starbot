@@ -37,13 +37,13 @@ jobs:
         run: npm ci
 
       - name: Run linter
-        run: npm run lint || echo "No lint script found"
+        run: npm run lint
 
       - name: Build TypeScript
         run: npm run build
 
       - name: Run tests
-        run: npm test || echo "No test script found"
+        run: npm test
 
       - name: Security audit
         run: npm audit --audit-level=high

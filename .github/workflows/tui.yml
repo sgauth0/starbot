@@ -65,5 +65,5 @@ jobs:
 
       - name: Security audit
         working-directory: ./Starbot_TUI
-        run: cargo audit || echo "No critical vulnerabilities found"
+        run: cargo audit
         continue-on-error: true

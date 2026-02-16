@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { chatsApi } from '@/lib/api/chats';
-import { API_BASE_URL, getApiToken } from '@/lib/config';
-import { Message } from '@/lib/types';
+import { API_BASE_URL } from '@/lib/config';
+import { Message, Settings } from '@/lib/types';
+import { toast } from 'sonner';
 
 export function useChatStream(chatId: string | null) {
   const queryClient = useQueryClient();
@@ -15,7 +16,7 @@ export function useChatStream(chatId: string | null) {
     enabled: !!chatId,
   });
 
-  const startStream = async (mode: 'quick' | 'standard' | 'deep' = 'standard') => {
+  const startStream = async (settings?: Partial<Settings>) => {
     if (!chatId) return;
 
     if (abortControllerRef.current) {
@@ -26,15 +27,18 @@ export function useChatStream(chatId: string | null) {
     abortControllerRef.current = controller;
 
     try {
-      const token = getApiToken();
       const response = await fetch(`${API_BASE_URL}/chats/${chatId}/run`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
-          ...(token ? { 'X-API-Token': token } : {}),
         },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({
+          mode: settings?.mode || 'standard',
+          auto: settings?.auto ?? true,
+          speed: settings?.speed ?? false,
+          model_prefs: settings?.model_prefs,
+        }),
         signal: controller.signal,
       });
 
@@ -48,6 +52,49 @@ export function useChatStream(chatId: string | null) {
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = 'message';
+      let currentDataLines: string[] = [];
+
+      const flushCurrentEvent = () => {
+        if (currentDataLines.length === 0) {
+          currentEvent = 'message';
+          return;
+        }
+
+        const rawData = currentDataLines.join('\n');
+        currentDataLines = [];
+
+        try {
+          const parsedData = JSON.parse(rawData);
+          handleSSEEvent(currentEvent, parsedData);
+        } catch (parseError) {
+          console.error('Failed to parse SSE event payload:', parseError, rawData);
+        }
+
+        currentEvent = 'message';
+      };
+
+      const processLine = (rawLine: string) => {
+        const line = rawLine.replace(/\r$/, '');
+
+        if (!line) {
+          flushCurrentEvent();
+          return;
+        }
+
+        // SSE comments begin with ":" and should be ignored.
+        if (line.startsWith(':')) {
+          return;
+        }
+
+        if (line.startsWith('event:')) {
+          currentEvent = line.slice(6).trim() || 'message';
+          return;
+        }
+
+        if (line.startsWith('data:')) {
+          currentDataLines.push(line.slice(5).trimStart());
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -58,25 +105,23 @@ export function useChatStream(chatId: string | null) {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.trim()) {
-            currentEvent = 'message'; // Reset on blank line
-            continue;
-          }
-
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          }
-
-          if (line.startsWith('data:')) {
-            const data = JSON.parse(line.slice(5).trim());
-            handleSSEEvent(currentEvent, data);
-          }
+          processLine(line);
         }
       }
+
+      // Handle any trailing line/event if the stream closes without a blank line.
+      if (buffer.length > 0) {
+        processLine(buffer);
+      }
+      flushCurrentEvent();
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
         console.error('Stream error:', err);
-        setStatus(`Error: ${err.message}`);
+        const errorMessage = err.message.includes('Failed to fetch')
+          ? 'Network error. Please check your connection.'
+          : err.message;
+        toast.error(errorMessage);
+        setStatus('');
       }
     }
   };
@@ -89,16 +134,16 @@ export function useChatStream(chatId: string | null) {
 
       case 'token.delta':
         queryClient.setQueryData<Message[]>(['messages', chatId], (old) => {
-          if (!old) return [];
-          const lastMsg = old[old.length - 1];
+          const messages = old ?? [];
+          const lastMsg = messages[messages.length - 1];
 
           if (lastMsg?.role === 'assistant' && !lastMsg.metadata?.final) {
             return [
-              ...old.slice(0, -1),
+              ...messages.slice(0, -1),
               { ...lastMsg, content: lastMsg.content + (data.text || data.delta) }
             ];
           } else {
-            return [...old, {
+            return [...messages, {
               id: data.message_id || 'temp-assistant',
               chatId: chatId!,
               role: 'assistant',
@@ -111,11 +156,11 @@ export function useChatStream(chatId: string | null) {
 
       case 'message.final':
         queryClient.setQueryData<Message[]>(['messages', chatId], (old) => {
-          if (!old) return [];
-          const lastMsg = old[old.length - 1];
+          const messages = old ?? [];
+          const lastMsg = messages[messages.length - 1];
 
           if (lastMsg?.role === 'assistant') {
-            return [...old.slice(0, -1), {
+            return [...messages.slice(0, -1), {
               id: data.message_id || data.id,
               chatId: chatId!,
               role: 'assistant',
@@ -124,7 +169,15 @@ export function useChatStream(chatId: string | null) {
               metadata: { final: true, ...data.usage },
             }];
           }
-          return old;
+
+          return [...messages, {
+            id: data.message_id || data.id || 'temp-assistant-final',
+            chatId: chatId!,
+            role: 'assistant',
+            content: data.content || '',
+            createdAt: new Date().toISOString(),
+            metadata: { final: true, ...data.usage },
+          }];
         });
         setStatus('');
         break;
@@ -135,7 +188,8 @@ export function useChatStream(chatId: string | null) {
 
       case 'error':
       case 'run.error':
-        setStatus(`Error: ${data.message}`);
+        toast.error(data.message || 'An error occurred');
+        setStatus('');
         break;
     }
   };

@@ -1,4 +1,4 @@
-import { API_BASE_URL, API_TOKEN_HEADER, getApiToken } from './config';
+import { API_BASE_URL } from './config';
 import { z } from 'zod';
 
 export class ApiError extends Error {
@@ -9,12 +9,7 @@ export class ApiError extends Error {
 }
 
 async function fetchApi<T>(path: string, options: RequestInit = {}, schema?: z.ZodSchema<T>): Promise<T> {
-  const token = getApiToken();
   const headers = new Headers(options.headers);
-
-  if (token) {
-    headers.set(API_TOKEN_HEADER, token);
-  }
 
   if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');

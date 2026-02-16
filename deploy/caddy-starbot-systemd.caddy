@@ -1,0 +1,19 @@
+# Starbot routing for Docklite Caddy
+# - WebGUI from docklite-site-starbot-web container
+# - API from host systemd service on docker bridge gateway
+
+starbot.cloud, www.starbot.cloud {
+  # API routes (host service)
+  handle /v1/* {
+    reverse_proxy 172.21.0.1:3737
+  }
+
+  handle /health {
+    reverse_proxy 172.21.0.1:3737
+  }
+
+  # WebGUI routes
+  handle {
+    reverse_proxy docklite-site-starbot-web:3001
+  }
+}

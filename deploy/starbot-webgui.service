@@ -1,6 +1,10 @@
 # Systemd service file for Starbot WebGUI
 # Place at: /etc/systemd/system/starbot-webgui.service
 #
+# Setup (run once):
+#   sudo useradd -r -s /bin/false starbot
+#   sudo chown -R starbot:starbot /var/www/sites/stella/starbot.cloud
+#
 # Enable: sudo systemctl enable starbot-webgui
 # Start:  sudo systemctl start starbot-webgui
 # Status: sudo systemctl status starbot-webgui
@@ -12,15 +16,15 @@ After=network.target starbot-api.service
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=/home/stella/projects/starbot/Starbot_WebGUI
+User=starbot
+Group=starbot
+WorkingDirectory=/var/www/sites/stella/starbot.cloud/Starbot_WebGUI
 Environment="NODE_ENV=production"
-Environment="PORT=3000"
+Environment="PORT=3001"
 Environment="NEXT_PUBLIC_API_URL=https://starbot.cloud/v1"
 
 # Start command (Next.js production server)
-ExecStart=/usr/local/bin/node /home/stella/projects/starbot/Starbot_WebGUI/.next/standalone/server.js
+ExecStart=/usr/bin/node /var/www/sites/stella/starbot.cloud/Starbot_WebGUI/.next/standalone/server.js
 
 # Restart policy
 Restart=always
@@ -31,9 +35,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=starbot-webgui
 
-# Security
+# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target

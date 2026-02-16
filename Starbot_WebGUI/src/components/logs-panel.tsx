@@ -1,35 +1,36 @@
 import { useUIStore } from '@/store/ui-store';
-import { Button } from '@/components/ui/button';
-import { X, Terminal } from 'lucide-react';
+import { Terminal } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Message } from '@/lib/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 export function LogsPanel() {
-  const { isLogsOpen, toggleLogs, selectedChatId } = useUIStore();
+  const { isLogsOpen, setLogsOpen, selectedChatId } = useUIStore();
   const queryClient = useQueryClient();
 
-  const messages = selectedChatId 
-    ? queryClient.getQueryData<Message[]>(['messages', selectedChatId]) 
+  const messages = selectedChatId
+    ? queryClient.getQueryData<Message[]>(['messages', selectedChatId])
     : [];
 
   const logs = messages?.filter(m => m.role === 'tool' || m.role === 'system') || [];
 
-  if (!isLogsOpen) return null;
-
   return (
-    <div className="absolute inset-y-0 right-0 z-40 bg-white w-96 shadow-xl border-l flex flex-col animate-in slide-in-from-right duration-200">
-        <div className="flex items-center justify-between p-4 border-b bg-slate-50">
+    <Dialog open={isLogsOpen} onOpenChange={setLogsOpen}>
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col p-0">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b">
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4" />
-            <h2 className="text-sm font-semibold">Diagnostics / Logs</h2>
+            <DialogTitle>Diagnostics / Logs</DialogTitle>
           </div>
-          <Button variant="ghost" size="icon" onClick={toggleLogs}>
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+        </DialogHeader>
 
-        <ScrollArea className="flex-1 p-4">
+        <ScrollArea className="flex-1 px-6 py-4">
             {logs.length === 0 ? (
                 <div className="text-sm text-slate-500 italic">No logs available for this chat.</div>
             ) : (
@@ -48,6 +49,7 @@ export function LogsPanel() {
                 </div>
             )}
         </ScrollArea>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

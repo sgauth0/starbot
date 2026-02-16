@@ -5,7 +5,7 @@ export const ProjectSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   createdAt: z.string(),
-  updatedAt: z.string(),
+  updatedAt: z.string().optional(),
 });
 
 export const ChatSchema = z.object({

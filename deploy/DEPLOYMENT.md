@@ -14,16 +14,16 @@ Deploy Starbot to `/var/www/sites/stella/starbot.cloud`
 ### Build API
 
 ```bash
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 
 # Install dependencies
-npm install --production=false
+npm ci
 
 # Build TypeScript to JavaScript
 npm run build
 
 # Install production dependencies only
-npm install --production
+npm ci --omit=dev
 
 # Verify build
 ls -la dist/
@@ -32,10 +32,10 @@ ls -la dist/
 ### Build WebGUI
 
 ```bash
-cd ~/projects/starbot/Starbot_WebGUI
+cd /var/www/sites/stella/starbot.cloud/Starbot_WebGUI
 
 # Install dependencies
-npm install
+npm ci
 
 # Build for production with standalone output
 npm run build
@@ -59,7 +59,7 @@ Then rebuild.
 ### API Environment
 
 ```bash
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 
 # Create production .env file
 cat > .env << 'EOF'
@@ -91,7 +91,7 @@ The WebGUI uses `NEXT_PUBLIC_API_URL` which should be set in the systemd service
 Update API to allow the production domain:
 
 ```bash
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 
 # Edit src/index.ts and add your domain to CORS origins
 # Then rebuild:
@@ -102,7 +102,7 @@ npm run build
 
 ```bash
 # Copy nginx config
-sudo cp ~/projects/starbot/deploy/nginx-starbot.cloud.conf \
+sudo cp /var/www/sites/stella/starbot.cloud/deploy/nginx-starbot.cloud.conf \
   /etc/nginx/sites-available/starbot.cloud
 
 # Create symlink
@@ -120,10 +120,10 @@ sudo systemctl reload nginx
 
 ```bash
 # Copy service files
-sudo cp ~/projects/starbot/deploy/starbot-api.service \
+sudo cp /var/www/sites/stella/starbot.cloud/deploy/starbot-api.service \
   /etc/systemd/system/starbot-api.service
 
-sudo cp ~/projects/starbot/deploy/starbot-webgui.service \
+sudo cp /var/www/sites/stella/starbot.cloud/deploy/starbot-webgui.service \
   /etc/systemd/system/starbot-webgui.service
 
 # Reload systemd
@@ -149,7 +149,7 @@ sudo systemctl status starbot-webgui
 curl http://localhost:3737/v1/health
 
 # Check WebGUI
-curl http://localhost:3000
+curl http://localhost:3001
 
 # Check via nginx
 curl http://starbot.cloud/v1/health
@@ -173,7 +173,7 @@ sudo certbot renew --dry-run
 ## Step 8: Initialize Database
 
 ```bash
-cd ~/projects/starbot/Starbot_API
+cd /var/www/sites/stella/starbot.cloud/Starbot_API
 
 # Run Prisma migrations (if using migrations)
 npx prisma migrate deploy
@@ -218,17 +218,17 @@ sudo systemctl reload nginx
 
 ```bash
 # 1. Pull latest code
-cd ~/projects/starbot
+cd /var/www/sites/stella/starbot.cloud
 git pull
 
 # 2. Rebuild API
 cd Starbot_API
-npm install
+npm ci
 npm run build
 
 # 3. Rebuild WebGUI
 cd ../Starbot_WebGUI
-npm install
+npm ci
 npm run build
 
 # 4. Restart services
@@ -255,7 +255,7 @@ sudo journalctl -u starbot-webgui -n 100 --no-pager
 ```bash
 # Check what's using the port
 sudo lsof -i :3737
-sudo lsof -i :3000
+sudo lsof -i :3001
 
 # Kill the process
 sudo kill <PID>
@@ -265,11 +265,11 @@ sudo kill <PID>
 
 ```bash
 # Check database permissions
-ls -la ~/projects/starbot/starbot.db
+ls -la /var/www/sites/stella/starbot.cloud/starbot.db
 
 # Fix permissions
-chmod 644 ~/projects/starbot/starbot.db
-chown stella:stella ~/projects/starbot/starbot.db
+chmod 644 /var/www/sites/stella/starbot.cloud/starbot.db
+chown starbot:starbot /var/www/sites/stella/starbot.cloud/starbot.db
 ```
 
 ### CORS errors
@@ -299,7 +299,7 @@ Then rebuild and restart API.
 - [ ] Database file has restricted permissions (644)
 - [ ] API only listens on localhost (not 0.0.0.0)
 - [ ] Nginx rate limiting configured (if needed)
-- [ ] Firewall configured (allow 80, 443; block 3000, 3737)
+- [ ] Firewall configured (allow 80, 443; block 3001, 3737)
 - [ ] Regular backups of starbot.db
 - [ ] API keys in .env files (never in code)
 
@@ -326,7 +326,7 @@ Already configured for `_next/static` files. Monitor and adjust as needed.
 cat > ~/backup-starbot.sh << 'EOF'
 #!/bin/bash
 DATE=$(date +%Y%m%d_%H%M%S)
-cp ~/projects/starbot/starbot.db ~/backups/starbot_$DATE.db
+cp /var/www/sites/stella/starbot.cloud/starbot.db ~/backups/starbot_$DATE.db
 # Keep only last 7 days
 find ~/backups -name "starbot_*.db" -mtime +7 -delete
 EOF

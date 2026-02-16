@@ -1,26 +1,93 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "highlight.js/styles/github.css" (prefers-color-scheme: light);
+@import "highlight.js/styles/github-dark.css" (prefers-color-scheme: dark);
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: 212 46% 96%;
+  --foreground: 217 33% 14%;
+  --card: 0 0% 100%;
+  --card-foreground: 217 33% 14%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 217 33% 14%;
+  --primary: 219 48% 14%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 212 35% 92%;
+  --secondary-foreground: 217 33% 18%;
+  --muted: 210 33% 94%;
+  --muted-foreground: 215 16% 38%;
+  --accent: 202 83% 92%;
+  --accent-foreground: 215 42% 19%;
+  --destructive: 0 78% 58%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 214 27% 84%;
+  --input: 214 27% 84%;
+  --ring: 201 84% 43%;
+  --radius: 0.9rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --font-sans: var(--font-space-grotesk);
+  --font-mono: var(--font-ibm-plex-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: 216 31% 9%;
+    --foreground: 210 32% 92%;
+    --card: 216 31% 11%;
+    --card-foreground: 210 32% 92%;
+    --popover: 216 31% 11%;
+    --popover-foreground: 210 32% 92%;
+    --primary: 199 89% 61%;
+    --primary-foreground: 216 31% 9%;
+    --secondary: 217 23% 18%;
+    --secondary-foreground: 210 32% 92%;
+    --muted: 217 23% 18%;
+    --muted-foreground: 213 14% 66%;
+    --accent: 199 54% 20%;
+    --accent-foreground: 207 86% 87%;
+    --destructive: 0 63% 45%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 17% 27%;
+    --input: 217 17% 27%;
+    --ring: 199 89% 61%;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(56, 189, 248, 0.18), transparent 35%),
+    radial-gradient(circle at 88% 86%, rgba(14, 165, 233, 0.14), transparent 35%),
+    hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-space-grotesk), sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
 }

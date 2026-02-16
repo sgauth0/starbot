@@ -17,6 +17,31 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+function splitOversizedText(text: string, maxTokens: number): string[] {
+  const maxChars = Math.max(1, maxTokens * 4);
+  if (text.length <= maxChars) {
+    return [text];
+  }
+
+  const parts: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf(' ', maxChars);
+    if (splitAt <= 0) {
+      splitAt = maxChars;
+    }
+    parts.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining.length > 0) {
+    parts.push(remaining);
+  }
+
+  return parts.filter(Boolean);
+}
+
 /**
  * Splits markdown content by headings into semantic chunks
  * Max 800 tokens per chunk to fit in embedding context
@@ -56,6 +81,20 @@ export function chunkMarkdown(content: string, maxTokens = 800): Chunk[] {
     } else {
       // Regular line
       const lineTokens = estimateTokens(line);
+
+      // A single oversized line must be split to respect max token bounds.
+      if (lineTokens > maxTokens) {
+        flushChunk();
+        const parts = splitOversizedText(line, maxTokens);
+        for (const part of parts) {
+          chunks.push({
+            text: part,
+            heading: currentHeading,
+            tokens: estimateTokens(part),
+          });
+        }
+        continue;
+      }
 
       // Check if adding this line would exceed max tokens
       if (currentTokens + lineTokens > maxTokens && currentChunk.length > 0) {
@@ -105,6 +144,10 @@ export function splitLargeChunk(text: string, maxTokens = 800): string[] {
 
   if (currentChunk) {
     chunks.push(currentChunk.trim());
+  }
+
+  if (chunks.length === 0 || chunks.some(chunk => estimateTokens(chunk) > maxTokens)) {
+    return splitOversizedText(text, maxTokens);
   }
 
   return chunks;

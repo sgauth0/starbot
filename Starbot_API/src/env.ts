@@ -47,6 +47,11 @@ export const env = {
   WEB_SEARCH_ENABLED: process.env.WEB_SEARCH_ENABLED === 'true',
   WEB_SEARCH_API_KEY: process.env.WEB_SEARCH_API_KEY || '',
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || '',
+  AUTH_ENFORCEMENT_ENABLED: process.env.AUTH_ENFORCEMENT_ENABLED === 'true',
+  RATE_LIMITING_ENABLED: process.env.RATE_LIMITING_ENABLED === 'true',
+  RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+  RATE_LIMIT_RUN_PER_WINDOW: parseInt(process.env.RATE_LIMIT_RUN_PER_WINDOW || '8', 10),
+  RATE_LIMIT_INFERENCE_PER_WINDOW: parseInt(process.env.RATE_LIMIT_INFERENCE_PER_WINDOW || '30', 10),
 
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
@@ -85,4 +90,11 @@ export function logConfiguration() {
   console.log(`  Tools enabled: ${env.TOOLS_ENABLED}`);
   console.log(`  Web search enabled: ${env.WEB_SEARCH_ENABLED}`);
   console.log(`  Triage model enabled: ${env.TRIAGE_MODEL_ENABLED}`);
+  console.log(`  Auth enforcement enabled: ${env.AUTH_ENFORCEMENT_ENABLED}`);
+  console.log(`  Rate limiting enabled: ${env.RATE_LIMITING_ENABLED}`);
+  if (env.RATE_LIMITING_ENABLED) {
+    console.log(`  Rate limit window ms: ${env.RATE_LIMIT_WINDOW_MS}`);
+    console.log(`  /run max per window: ${env.RATE_LIMIT_RUN_PER_WINDOW}`);
+    console.log(`  /inference/chat max per window: ${env.RATE_LIMIT_INFERENCE_PER_WINDOW}`);
+  }
 }

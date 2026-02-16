@@ -6,20 +6,19 @@ import { projectsApi } from '@/lib/api/projects';
 import { useUIStore } from '@/store/ui-store';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Plus, MessageSquare, Settings, Folder } from 'lucide-react';
+import { Plus, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import { ApiError } from '@/lib/api';
 
 export function Sidebar() {
   const { 
     selectedChatId, 
     setSelectedChatId, 
-    isSidebarOpen, 
-    toggleSettings 
+    isSidebarOpen
   } = useUIStore();
   
   const queryClient = useQueryClient();
-  const router = useRouter();
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
@@ -36,13 +35,31 @@ export function Sidebar() {
   });
 
   const createChatMutation = useMutation({
-    mutationFn: (title: string) => {
-      if (!currentProjectId) throw new Error('No project selected');
-      return chatsApi.create(currentProjectId, { title });
+    mutationFn: async (title: string) => {
+      let projectId = currentProjectId;
+
+      if (!projectId) {
+        const project = await projectsApi.create({ name: 'My Project' });
+        projectId = project.id;
+      }
+
+      return chatsApi.create(projectId, { title });
     },
     onSuccess: (newChat) => {
-      queryClient.invalidateQueries({ queryKey: ['chats', currentProjectId] });
+      const projectIdForCache = newChat.projectId || currentProjectId;
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      if (projectIdForCache) {
+        queryClient.invalidateQueries({ queryKey: ['chats', projectIdForCache] });
+      }
       setSelectedChatId(newChat.id);
+    },
+    onError: (error) => {
+      const message = error instanceof ApiError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : 'Failed to create chat';
+      toast.error(message);
     },
   });
 
@@ -53,36 +70,54 @@ export function Sidebar() {
   if (!isSidebarOpen) return null;
 
   return (
-    <div className="w-64 border-r bg-slate-50 flex flex-col h-full">
-      <div className="p-4 border-b">
-        <Button onClick={handleCreateChat} className="w-full justify-start" variant="outline">
+    <aside className="h-full w-full rounded-3xl border border-slate-200/80 bg-white/80 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-white/65 flex flex-col overflow-hidden">
+      <div className="px-4 py-4 border-b border-slate-200/80 bg-gradient-to-r from-slate-50 to-white">
+        <div className="mb-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Starbot</p>
+          <h2 className="text-sm font-semibold text-slate-900">Conversations</h2>
+        </div>
+        <Button
+          onClick={handleCreateChat}
+          className="w-full justify-start bg-slate-900 text-slate-50 hover:bg-slate-800 border-0 shadow-sm"
+          aria-label="Create new chat"
+          disabled={createChatMutation.isPending}
+        >
           <Plus className="mr-2 h-4 w-4" />
-          New Chat
+          {createChatMutation.isPending ? 'Creating...' : 'New Chat'}
         </Button>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-2 space-y-2">
+      <ScrollArea className="flex-1 px-2 py-3">
+        <div className="space-y-1.5" role="list" aria-label="Chat list">
           {chats?.map((chat) => (
             <Button
               key={chat.id}
-              variant={selectedChatId === chat.id ? 'secondary' : 'ghost'}
-              className={cn("w-full justify-start font-normal", selectedChatId === chat.id && "bg-slate-200")}
+              variant="ghost"
+              className={cn(
+                "w-full justify-start font-normal h-10 rounded-xl px-3",
+                selectedChatId === chat.id
+                  ? "bg-slate-900 text-white hover:bg-slate-800 hover:text-white"
+                  : "text-slate-700 hover:bg-slate-100"
+              )}
               onClick={() => setSelectedChatId(chat.id)}
+              aria-label={`Chat: ${chat.title}`}
+              aria-current={selectedChatId === chat.id ? "page" : undefined}
             >
               <MessageSquare className="mr-2 h-4 w-4" />
               <span className="truncate">{chat.title}</span>
             </Button>
           ))}
+          {!chats?.length && (
+            <div className="mx-2 mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-6 text-sm text-slate-500 text-center">
+              No chats yet. Click New Chat to create one.
+            </div>
+          )}
         </div>
       </ScrollArea>
 
-      <div className="p-4 border-t mt-auto">
-        <Button variant="ghost" className="w-full justify-start" onClick={toggleSettings}>
-          <Settings className="mr-2 h-4 w-4" />
-          Settings
-        </Button>
+      <div className="p-4 border-t border-slate-200/80 mt-auto bg-white/70">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Use account menu for settings</p>
       </div>
-    </div>
+    </aside>
   );
 }

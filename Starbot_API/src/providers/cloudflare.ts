@@ -15,7 +15,8 @@ export class CloudflareProvider implements Provider {
       throw new Error('CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are not configured');
     }
 
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${options.model}`;
+    const encodedModel = encodeURIComponent(options.model);
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${encodedModel}`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -74,7 +75,8 @@ export class CloudflareProvider implements Provider {
       throw new Error('CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are not configured');
     }
 
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${options.model}`;
+    const encodedModel = encodeURIComponent(options.model);
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${encodedModel}`;
 
     const response = await fetch(url, {
       method: 'POST',

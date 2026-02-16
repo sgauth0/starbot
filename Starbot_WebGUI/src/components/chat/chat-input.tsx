@@ -1,4 +1,4 @@
-import { useState, KeyboardEvent } from 'react';
+import { KeyboardEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Send } from 'lucide-react';
@@ -27,17 +27,24 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   };
 
   return (
-    <div className="p-4 border-t bg-white">
-      <div className="max-w-3xl mx-auto flex gap-2">
+    <div className="border-t border-slate-200/80 bg-white/85 px-4 py-4 backdrop-blur">
+      <div className="max-w-4xl mx-auto flex gap-2 items-end">
         <Textarea
           value={draftInput}
           onChange={(e) => setDraftInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
-          className="min-h-[50px] max-h-[200px]"
+          placeholder="Ask Starbot anything..."
+          className="min-h-[56px] max-h-[220px] rounded-2xl border-slate-300 bg-white shadow-sm focus-visible:ring-slate-400"
           disabled={disabled}
+          aria-label="Message input"
         />
-        <Button onClick={handleSend} disabled={disabled || !draftInput.trim()} size="icon">
+        <Button
+          onClick={handleSend}
+          disabled={disabled || !draftInput.trim()}
+          size="icon"
+          className="h-11 w-11 rounded-2xl bg-slate-900 text-slate-50 hover:bg-slate-800"
+          aria-label="Send message"
+        >
           <Send className="h-4 w-4" />
         </Button>
       </div>

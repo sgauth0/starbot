@@ -12,6 +12,8 @@ import {
 } from '../services/model-catalog.js';
 import { getProvider } from '../providers/index.js';
 import { getRelevantContext } from '../services/retrieval.js';
+import { env } from '../env.js';
+import { enforceRateLimitIfEnabled, requireAuthIfEnabled } from '../security/route-guards.js';
 
 const RunChatSchema = z.object({
   mode: z.enum(['quick', 'standard', 'deep']).optional().default('standard'),
@@ -49,6 +51,18 @@ function parseModelPrefs(raw?: string): { provider?: string; model?: string } {
 
 function sortByCost(models: ModelDefinition[]): ModelDefinition[] {
   return [...models].sort((a, b) => {
+    const aCost = a.costPer1kInput || Number.POSITIVE_INFINITY;
+    const bCost = b.costPer1kInput || Number.POSITIVE_INFINITY;
+    return aCost - bCost;
+  });
+}
+
+function sortFallbackCandidates(models: ModelDefinition[], targetTier: number): ModelDefinition[] {
+  return [...models].sort((a, b) => {
+    const aTierDistance = Math.abs(a.tier - targetTier);
+    const bTierDistance = Math.abs(b.tier - targetTier);
+    if (aTierDistance !== bTierDistance) return aTierDistance - bTierDistance;
+
     const aCost = a.costPer1kInput || Number.POSITIVE_INFINITY;
     const bCost = b.costPer1kInput || Number.POSITIVE_INFINITY;
     return aCost - bCost;
@@ -109,6 +123,18 @@ export async function generationRoutes(server: FastifyInstance) {
   // POST /v1/chats/:chatId/run - Start generation (SSE streaming)
   server.post<RunParams>('/chats/:chatId/run', async (request, reply) => {
     const { chatId } = request.params;
+
+    if (!requireAuthIfEnabled(request, reply)) {
+      return;
+    }
+
+    if (!enforceRateLimitIfEnabled(request, reply, {
+      routeKey: 'run',
+      maxRequests: env.RATE_LIMIT_RUN_PER_WINDOW,
+    })) {
+      return;
+    }
+
     const body = RunChatSchema.parse(request.body);
 
     // Verify chat exists
@@ -172,29 +198,43 @@ export async function generationRoutes(server: FastifyInstance) {
 
       const { category, lane, complexity } = triageResult.decision;
 
-      sendEvent('status', {
-        message: `Routing (${category}/${lane}, complexity: ${complexity})...`,
-      });
-
       // 3. Map lane to tier (quick=1, standard=2, deep=3)
       const tierMap = { quick: 1, standard: 2, deep: 3 };
-      const tier = tierMap[lane];
+      const triageTier = tierMap[lane];
+      const requestedTier = tierMap[body.mode];
+      const baseTier = body.auto ? triageTier : requestedTier;
+      const selectionTier = body.speed ? Math.max(1, baseTier - 1) : baseTier;
+
+      sendEvent('status', {
+        message: body.auto
+          ? `Routing auto (${category}/${lane}, complexity: ${complexity})...`
+          : `Routing manual (${body.mode}, complexity: ${complexity})...`,
+      });
+
+      if (body.speed) {
+        sendEvent('status', {
+          message: 'Speed mode enabled: preferring a faster model tier...',
+        });
+      }
 
       // 4. Select model from catalog (respect optional explicit preference)
-      const selectedModel = await resolveRequestedModel(tier, 'text', body.model_prefs);
-
-      if (!selectedModel) {
+      const primaryModel = await resolveRequestedModel(selectionTier, 'text', body.model_prefs);
+      if (!primaryModel) {
         throw new Error('No models available. Please configure at least one provider.');
       }
 
-      sendEvent('status', {
-        message: `Using ${selectedModel.displayName} (${selectedModel.provider})...`,
+      const fallbackPool = await listModels({
+        status: 'enabled',
+        capability: 'text',
+        configuredOnly: true,
       });
+      const fallbackCandidates = sortFallbackCandidates(
+        fallbackPool.filter((model) => model.id !== primaryModel.id),
+        selectionTier,
+      );
+      const candidateModels = [primaryModel, ...fallbackCandidates];
 
-      // 5. Get provider
-      const provider = getProvider(selectedModel.provider);
-
-      // 6. Convert messages to provider format and inject memory
+      // 5. Convert messages to provider format and inject memory
       const providerMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
 
       // Inject memory context as system message if available
@@ -211,26 +251,66 @@ export async function generationRoutes(server: FastifyInstance) {
         content: m.content,
       })));
 
-      // 7. Stream response from provider
+      // 6. Stream response from provider with automatic model/provider failover
       let fullResponse = '';
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let selectedModel: ModelDefinition | null = null;
+      let lastProviderError: unknown = null;
 
-      for await (const chunk of provider.sendChatStream(providerMessages, {
-        model: selectedModel.deploymentName,
-        maxTokens: selectedModel.maxOutputTokens,
-        temperature: 0.7,
-      })) {
-        if (chunk.text) {
-          fullResponse += chunk.text;
-          sendEvent('token.delta', { text: chunk.text });
-        }
+      for (const candidate of candidateModels) {
+        sendEvent('status', {
+          message: `Using ${candidate.displayName} (${candidate.provider})...`,
+        });
 
-        if (chunk.usage) {
-          usage = chunk.usage;
+        try {
+          const provider = getProvider(candidate.provider);
+          fullResponse = '';
+          usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+
+          for await (const chunk of provider.sendChatStream(providerMessages, {
+            model: candidate.deploymentName,
+            maxTokens: body.speed
+              ? Math.min(candidate.maxOutputTokens, 1024)
+              : candidate.maxOutputTokens,
+            temperature: 0.7,
+          })) {
+            if (chunk.text) {
+              fullResponse += chunk.text;
+              sendEvent('token.delta', { text: chunk.text });
+            }
+
+            if (chunk.usage) {
+              usage = chunk.usage;
+            }
+          }
+
+          if (!fullResponse.trim()) {
+            throw new Error(`Model "${candidate.displayName}" returned an empty response`);
+          }
+
+          selectedModel = candidate;
+          break;
+        } catch (err) {
+          lastProviderError = err;
+          server.log.warn(
+            { err, provider: candidate.provider, model: candidate.deploymentName },
+            'Model run failed, trying fallback',
+          );
+          sendEvent('status', {
+            message: `${candidate.displayName} unavailable, trying fallback...`,
+          });
         }
       }
 
-      // 8. Save assistant message
+      if (!selectedModel) {
+        throw (
+          lastProviderError instanceof Error
+            ? lastProviderError
+            : new Error('All configured models failed to respond')
+        );
+      }
+
+      // 7. Save assistant message
       const assistantMessage = await prisma.message.create({
         data: {
           chatId,
@@ -239,7 +319,7 @@ export async function generationRoutes(server: FastifyInstance) {
         },
       });
 
-      // 9. Update chat title if needed
+      // 8. Update chat title if needed
       const newTitle = chat.title === 'New Chat'
         ? lastUserMsg.content.slice(0, 50) + (lastUserMsg.content.length > 50 ? '...' : '')
         : chat.title;
@@ -254,7 +334,7 @@ export async function generationRoutes(server: FastifyInstance) {
         },
       });
 
-      // 10. Send final event
+      // 9. Send final event
       sendEvent('message.final', {
         id: assistantMessage.id,
         role: 'assistant',

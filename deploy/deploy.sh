@@ -15,87 +15,172 @@ NC='\033[0m' # No Color
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+API_DIR="$PROJECT_ROOT/Starbot_API"
+API_RUNTIME_USER="stella"
+API_RUNTIME_GROUP="stella"
+WEBGUI_DEPLOY_ROOT="/var/www/sites/stella/starbot.cloud"
+WEBGUI_DEPLOY_DIR="$WEBGUI_DEPLOY_ROOT/Starbot_WebGUI"
+WEBGUI_DOCKER_CONTAINER="docklite-site-starbot-web"
+USE_DOCKER_WEB=0
 
 echo -e "${YELLOW}📁 Project root: $PROJECT_ROOT${NC}"
+echo -e "${YELLOW}📁 WebGUI deploy dir: $WEBGUI_DEPLOY_DIR${NC}"
+
+if command -v docker >/dev/null 2>&1; then
+    if sudo docker ps -a --format '{{.Names}}' | grep -Fxq "$WEBGUI_DOCKER_CONTAINER"; then
+        USE_DOCKER_WEB=1
+        echo -e "${YELLOW}🐳 Detected Docker WebGUI container: $WEBGUI_DOCKER_CONTAINER${NC}"
+    fi
+fi
 
 # Step 1: Build API
 echo -e "\n${GREEN}1️⃣  Building API...${NC}"
-cd "$PROJECT_ROOT/Starbot_API"
-npm install
-npm run build
+if id -u "$API_RUNTIME_USER" >/dev/null 2>&1; then
+    echo -e "${YELLOW}Preparing API directory ownership for $API_RUNTIME_USER...${NC}"
+    sudo chown -R "$API_RUNTIME_USER:$API_RUNTIME_GROUP" "$API_DIR"
+    echo -e "${YELLOW}Building API as $API_RUNTIME_USER...${NC}"
+    sudo -u "$API_RUNTIME_USER" bash -lc "cd '$API_DIR' && npm ci && npm run build"
+else
+    cd "$API_DIR"
+    npm ci
+    npm run build
+fi
 
-if [ ! -f "dist/index.js" ]; then
+if [ ! -f "$API_DIR/dist/index.js" ]; then
     echo -e "${RED}❌ API build failed - dist/index.js not found${NC}"
     exit 1
 fi
 
 echo -e "${GREEN}✅ API built successfully${NC}"
 
-# Step 2: Build WebGUI
-echo -e "\n${GREEN}2️⃣  Building WebGUI...${NC}"
-cd "$PROJECT_ROOT/Starbot_WebGUI"
-npm install
-npm run build
+# Step 2: Sync + Build WebGUI in /var/www
+echo -e "\n${GREEN}2️⃣  Syncing and building WebGUI...${NC}"
 
-if [ ! -f ".next/standalone/server.js" ]; then
+if ! id -u starbot >/dev/null 2>&1; then
+    echo -e "${YELLOW}Creating system user 'starbot'...${NC}"
+    sudo useradd -r -s /usr/sbin/nologin starbot || true
+fi
+
+sudo mkdir -p "$WEBGUI_DEPLOY_DIR"
+sudo rsync -a --delete \
+    --exclude node_modules \
+    --exclude .next \
+    --exclude .git \
+    "$PROJECT_ROOT/Starbot_WebGUI/" \
+    "$WEBGUI_DEPLOY_DIR/"
+sudo chown -R starbot:starbot "$WEBGUI_DEPLOY_ROOT"
+
+echo -e "${YELLOW}Building WebGUI at $WEBGUI_DEPLOY_DIR as starbot...${NC}"
+sudo -u starbot bash -lc "cd '$WEBGUI_DEPLOY_DIR' && rm -rf .next && npm ci && npm run build"
+
+if [ ! -f "$WEBGUI_DEPLOY_DIR/.next/standalone/server.js" ]; then
     echo -e "${RED}❌ WebGUI build failed - standalone server not found${NC}"
     echo -e "${YELLOW}ℹ️  Make sure output: 'standalone' is set in next.config.ts${NC}"
     exit 1
 fi
 
+BUILD_ID_FILE="$WEBGUI_DEPLOY_DIR/.next/BUILD_ID"
+STANDALONE_BUILD_ID_FILE="$WEBGUI_DEPLOY_DIR/.next/standalone/.next/BUILD_ID"
+if [ -f "$BUILD_ID_FILE" ] && [ -f "$STANDALONE_BUILD_ID_FILE" ]; then
+    BUILD_ID="$(cat "$BUILD_ID_FILE")"
+    STANDALONE_BUILD_ID="$(cat "$STANDALONE_BUILD_ID_FILE")"
+    if [ "$BUILD_ID" != "$STANDALONE_BUILD_ID" ]; then
+        echo -e "${RED}❌ WebGUI build output mismatch${NC}"
+        echo -e "${YELLOW}BUILD_ID (.next): $BUILD_ID${NC}"
+        echo -e "${YELLOW}BUILD_ID (standalone): $STANDALONE_BUILD_ID${NC}"
+        echo -e "${YELLOW}Refusing to publish mixed assets/server output.${NC}"
+        exit 1
+    fi
+fi
+
+echo -e "${YELLOW}Publishing WebGUI runtime files to $WEBGUI_DEPLOY_ROOT...${NC}"
+sudo rm -rf \
+    "$WEBGUI_DEPLOY_ROOT/.next" \
+    "$WEBGUI_DEPLOY_ROOT/node_modules" \
+    "$WEBGUI_DEPLOY_ROOT/public"
+sudo rm -f \
+    "$WEBGUI_DEPLOY_ROOT/server.js" \
+    "$WEBGUI_DEPLOY_ROOT/package.json" \
+    "$WEBGUI_DEPLOY_ROOT/package-lock.json"
+sudo mkdir -p "$WEBGUI_DEPLOY_ROOT/.next/static" "$WEBGUI_DEPLOY_ROOT/public"
+
+sudo rsync -a "$WEBGUI_DEPLOY_DIR/.next/standalone/" "$WEBGUI_DEPLOY_ROOT/"
+sudo rsync -a "$WEBGUI_DEPLOY_DIR/.next/static/" "$WEBGUI_DEPLOY_ROOT/.next/static/"
+sudo rsync -a "$WEBGUI_DEPLOY_DIR/public/" "$WEBGUI_DEPLOY_ROOT/public/"
+sudo cp "$WEBGUI_DEPLOY_DIR/package.json" "$WEBGUI_DEPLOY_ROOT/package.json"
+if [ -f "$WEBGUI_DEPLOY_DIR/package-lock.json" ]; then
+    sudo cp "$WEBGUI_DEPLOY_DIR/package-lock.json" "$WEBGUI_DEPLOY_ROOT/package-lock.json"
+fi
+sudo chown -R starbot:starbot "$WEBGUI_DEPLOY_ROOT"
+
 echo -e "${GREEN}✅ WebGUI built successfully${NC}"
 
 # Step 3: Check database
 echo -e "\n${GREEN}3️⃣  Checking database...${NC}"
-cd "$PROJECT_ROOT/Starbot_API"
-
-if [ ! -f "../starbot.db" ]; then
-    echo -e "${YELLOW}⚠️  Database not found. Pushing schema...${NC}"
-    npx prisma db push
+if id -u "$API_RUNTIME_USER" >/dev/null 2>&1; then
+    echo -e "${YELLOW}Syncing schema as $API_RUNTIME_USER...${NC}"
+    sudo -u "$API_RUNTIME_USER" bash -lc "
+      cd '$API_DIR'
+      if [ -f .env ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ./.env
+        set +a
+      fi
+      DATABASE_URL=\"\${DATABASE_URL:-file:../starbot.db}\"
+      DATABASE_URL=\"\$DATABASE_URL\" npx prisma db push
+    "
 else
-    echo -e "${GREEN}✅ Database exists${NC}"
+    cd "$API_DIR"
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ./.env
+        set +a
+    fi
+    DATABASE_URL="${DATABASE_URL:-file:../starbot.db}"
+    DATABASE_URL="$DATABASE_URL" npx prisma db push
 fi
+echo -e "${GREEN}✅ Database schema synced${NC}"
 
 # Step 4: Install systemd services
 echo -e "\n${GREEN}4️⃣  Installing systemd services...${NC}"
 
-if [ ! -f "/etc/systemd/system/starbot-api.service" ]; then
-    echo -e "${YELLOW}Installing starbot-api.service...${NC}"
-    sudo cp "$PROJECT_ROOT/deploy/starbot-api.service" /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable starbot-api
-    echo -e "${GREEN}✅ starbot-api.service installed${NC}"
-else
-    echo -e "${YELLOW}ℹ️  starbot-api.service already exists${NC}"
+echo -e "${YELLOW}Syncing starbot-api.service...${NC}"
+sudo cp "$PROJECT_ROOT/deploy/starbot-api.service" /etc/systemd/system/
+
+if [ "$USE_DOCKER_WEB" -eq 0 ]; then
+    echo -e "${YELLOW}Syncing starbot-webgui.service...${NC}"
+    sudo cp "$PROJECT_ROOT/deploy/starbot-webgui.service" /etc/systemd/system/
 fi
 
-if [ ! -f "/etc/systemd/system/starbot-webgui.service" ]; then
-    echo -e "${YELLOW}Installing starbot-webgui.service...${NC}"
-    sudo cp "$PROJECT_ROOT/deploy/starbot-webgui.service" /etc/systemd/system/
-    sudo systemctl daemon-reload
+sudo systemctl daemon-reload
+sudo systemctl enable starbot-api
+if [ "$USE_DOCKER_WEB" -eq 0 ]; then
     sudo systemctl enable starbot-webgui
-    echo -e "${GREEN}✅ starbot-webgui.service installed${NC}"
-else
-    echo -e "${YELLOW}ℹ️  starbot-webgui.service already exists${NC}"
 fi
+echo -e "${GREEN}✅ systemd unit files synced${NC}"
 
 # Step 5: Install nginx config
 echo -e "\n${GREEN}5️⃣  Installing nginx config...${NC}"
 
-if [ ! -f "/etc/nginx/sites-available/starbot.cloud" ]; then
-    echo -e "${YELLOW}Installing nginx config...${NC}"
-    sudo cp "$PROJECT_ROOT/deploy/nginx-starbot.cloud.conf" /etc/nginx/sites-available/starbot.cloud
-    sudo ln -sf /etc/nginx/sites-available/starbot.cloud /etc/nginx/sites-enabled/starbot.cloud
+echo -e "${YELLOW}Syncing nginx config...${NC}"
+sudo cp "$PROJECT_ROOT/deploy/nginx-starbot.cloud.conf" /etc/nginx/sites-available/starbot.cloud
+sudo ln -sf /etc/nginx/sites-available/starbot.cloud /etc/nginx/sites-enabled/starbot.cloud
 
-    # Test nginx config
-    if sudo nginx -t; then
-        echo -e "${GREEN}✅ Nginx config installed${NC}"
-    else
-        echo -e "${RED}❌ Nginx config test failed${NC}"
-        exit 1
-    fi
+# Sync Docklite Caddy legacy route when present (this host serves starbot.cloud via Caddy).
+if [ -d "/home/docklite-new-new/caddy/legacy" ] && [ -f "$PROJECT_ROOT/deploy/caddy-starbot-systemd.caddy" ]; then
+    echo -e "${YELLOW}Syncing Docklite Caddy route...${NC}"
+    sudo cp "$PROJECT_ROOT/deploy/caddy-starbot-systemd.caddy" \
+      /home/docklite-new-new/caddy/legacy/starbot-systemd.caddy
+fi
+
+# Test nginx config
+if sudo nginx -t; then
+    echo -e "${GREEN}✅ Nginx config synced${NC}"
 else
-    echo -e "${YELLOW}ℹ️  Nginx config already exists${NC}"
+    echo -e "${RED}❌ Nginx config test failed${NC}"
+    exit 1
 fi
 
 # Step 6: Restart services
@@ -113,21 +198,53 @@ else
     exit 1
 fi
 
-echo -e "${YELLOW}Restarting starbot-webgui...${NC}"
-sudo systemctl restart starbot-webgui
-sleep 2
-
-if sudo systemctl is-active --quiet starbot-webgui; then
-    echo -e "${GREEN}✅ starbot-webgui is running${NC}"
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    echo -e "${YELLOW}Restarting Docker WebGUI container ($WEBGUI_DOCKER_CONTAINER)...${NC}"
+    sudo systemctl disable --now starbot-webgui >/dev/null 2>&1 || true
+    sudo docker restart "$WEBGUI_DOCKER_CONTAINER" >/dev/null
+    if sudo docker ps --format '{{.Names}}' | grep -Fxq "$WEBGUI_DOCKER_CONTAINER"; then
+        echo -e "${GREEN}✅ Docker WebGUI container is running${NC}"
+    else
+        echo -e "${RED}❌ Docker WebGUI container failed to start${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}❌ starbot-webgui failed to start${NC}"
-    echo -e "${YELLOW}View logs: sudo journalctl -u starbot-webgui -n 50${NC}"
-    exit 1
+    echo -e "${YELLOW}Restarting starbot-webgui...${NC}"
+    if sudo ss -ltnp | grep -q ':3001 '; then
+        echo -e "${YELLOW}Port 3001 is already in use. Releasing stale listener...${NC}"
+        sudo fuser -k 3001/tcp || true
+        sleep 1
+    fi
+    sudo systemctl restart starbot-webgui
+    sleep 2
+
+    if sudo systemctl is-active --quiet starbot-webgui; then
+        echo -e "${GREEN}✅ starbot-webgui is running${NC}"
+    else
+        echo -e "${RED}❌ starbot-webgui failed to start${NC}"
+        echo -e "${YELLOW}View logs: sudo journalctl -u starbot-webgui -n 50${NC}"
+        exit 1
+    fi
+fi
+
+if sudo docker ps -a --format '{{.Names}}' | grep -Fxq "docklite_caddy"; then
+    echo -e "${YELLOW}Reloading Docklite Caddy...${NC}"
+    sudo docker restart docklite_caddy >/dev/null
+    echo -e "${GREEN}✅ Docklite Caddy restarted${NC}"
 fi
 
 echo -e "${YELLOW}Reloading nginx...${NC}"
-sudo systemctl reload nginx
-echo -e "${GREEN}✅ Nginx reloaded${NC}"
+if sudo systemctl is-active --quiet nginx; then
+    sudo systemctl reload nginx
+    echo -e "${GREEN}✅ Nginx reloaded${NC}"
+else
+    echo -e "${YELLOW}⚠️  nginx service is not active. Attempting to start nginx...${NC}"
+    if sudo systemctl start nginx; then
+        echo -e "${GREEN}✅ Nginx started${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Could not start nginx. Continuing with API/WebGUI deployment.${NC}"
+    fi
+fi
 
 # Step 7: Verify deployment
 echo -e "\n${GREEN}7️⃣  Verifying deployment...${NC}"
@@ -140,25 +257,45 @@ else
 fi
 
 echo -e "${YELLOW}Testing WebGUI...${NC}"
-if curl -sf http://localhost:3000 > /dev/null; then
-    echo -e "${GREEN}✅ WebGUI responding${NC}"
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    if curl -sf -H 'Host: starbot.cloud' http://127.0.0.1 > /dev/null; then
+        echo -e "${GREEN}✅ WebGUI responding via Docker Caddy${NC}"
+    else
+        echo -e "${RED}❌ WebGUI not responding via Docker Caddy${NC}"
+    fi
 else
-    echo -e "${RED}❌ WebGUI not responding${NC}"
+    if curl -sf http://localhost:3001 > /dev/null; then
+        echo -e "${GREEN}✅ WebGUI responding${NC}"
+    else
+        echo -e "${RED}❌ WebGUI not responding${NC}"
+    fi
 fi
 
 # Summary
 echo -e "\n${GREEN}🎉 Deployment complete!${NC}"
 echo -e "\n${YELLOW}📊 Service Status:${NC}"
 sudo systemctl status starbot-api --no-pager -l | head -3
-sudo systemctl status starbot-webgui --no-pager -l | head -3
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    sudo docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E "NAMES|$WEBGUI_DOCKER_CONTAINER"
+else
+    sudo systemctl status starbot-webgui --no-pager -l | head -3
+fi
 
 echo -e "\n${YELLOW}🔗 URLs:${NC}"
 echo -e "  API:    http://localhost:3737/v1/health"
-echo -e "  WebGUI: http://localhost:3000"
-echo -e "  Public: http://starbot.cloud (via nginx)"
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    echo -e "  WebGUI: https://starbot.cloud (via Docker Caddy)"
+else
+    echo -e "  WebGUI: http://localhost:3001"
+    echo -e "  Public: http://starbot.cloud (via nginx)"
+fi
 
 echo -e "\n${YELLOW}📝 Next Steps:${NC}"
 echo -e "  1. Set up SSL: ${GREEN}sudo certbot --nginx -d starbot.cloud -d www.starbot.cloud${NC}"
 echo -e "  2. View API logs: ${GREEN}sudo journalctl -u starbot-api -f${NC}"
-echo -e "  3. View WebGUI logs: ${GREEN}sudo journalctl -u starbot-webgui -f${NC}"
+if [ "$USE_DOCKER_WEB" -eq 1 ]; then
+    echo -e "  3. View WebGUI logs: ${GREEN}sudo docker logs -f $WEBGUI_DOCKER_CONTAINER${NC}"
+else
+    echo -e "  3. View WebGUI logs: ${GREEN}sudo journalctl -u starbot-webgui -f${NC}"
+fi
 echo -e "  4. View nginx logs: ${GREEN}sudo tail -f /var/log/nginx/starbot.cloud.access.log${NC}"
