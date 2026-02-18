@@ -353,9 +353,17 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
                     // Mark as sendable (complete)
                     last_msg.sendable = true;
 
-                    // If still placeholder, replace with "(No response)"
+                    // If still placeholder, try to extract content from message.final event
                     if last_msg.content == "…" {
-                        last_msg.content = "(No text response)".to_string();
+                        if let Some(content) = metadata.get("content").and_then(|v| v.as_str()) {
+                            if !content.is_empty() {
+                                last_msg.content = content.to_string();
+                            } else {
+                                last_msg.content = "(No text response)".to_string();
+                            }
+                        } else {
+                            last_msg.content = "(No text response)".to_string();
+                        }
                     }
                 }
             }
