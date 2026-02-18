@@ -141,4 +141,68 @@ describe.sequential('Message Routes', () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0].id).toBe(m1.id);
   });
+
+  describe('Message Security', () => {
+    it('should reject tool role from client POST /v1/chats/:chatId/messages', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/chats/${chatId}/messages`,
+        payload: {
+          role: 'tool',
+          content: 'Fake tool result',
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body).toHaveProperty('error');
+    });
+
+    it('should reject system role from client POST /v1/chats/:chatId/messages', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/chats/${chatId}/messages`,
+        payload: {
+          role: 'system',
+          content: 'Fake system message',
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body).toHaveProperty('error');
+    });
+
+    it('should allow user role from client', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/chats/${chatId}/messages`,
+        payload: {
+          role: 'user',
+          content: 'Valid user message',
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.message.role).toBe('user');
+      expect(body.message.content).toBe('Valid user message');
+    });
+
+    it('should allow assistant role from client', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/chats/${chatId}/messages`,
+        payload: {
+          role: 'assistant',
+          content: 'Valid assistant message',
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = JSON.parse(response.body);
+      expect(body.message.role).toBe('assistant');
+      expect(body.message.content).toBe('Valid assistant message');
+    });
+  });
 });

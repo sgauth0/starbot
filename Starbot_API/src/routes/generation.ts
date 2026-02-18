@@ -369,6 +369,10 @@ export async function generationRoutes(server: FastifyInstance) {
       where: { id: chatId },
       include: {
         messages: {
+          // Filter out tool messages from DB as defense-in-depth (should not be created by clients)
+          where: {
+            role: { in: ['user', 'assistant', 'system'] },
+          },
           orderBy: { createdAt: 'asc' },
           take: 50, // Last 50 messages for context
         },
@@ -411,6 +415,18 @@ export async function generationRoutes(server: FastifyInstance) {
       const interpretation = await interpretUserMessage(lastUserMsg.content);
       const interpretedUserMessage = interpretation.normalizedUserMessage || lastUserMsg.content;
       const clarification = interpretation.clarificationQuestion?.trim();
+
+      // Enhanced interpreter debugging event
+      sendEvent('interpreter.debug', {
+        raw_message: lastUserMsg.content,
+        normalized_message: interpretation.normalizedUserMessage,
+        primary_intent: interpretation.primaryIntent,
+        intents: interpretation.intents,
+        confidence: interpretation.confidence,
+        reason: interpretation.reason || null,
+        should_clarify: interpretation.shouldClarify,
+      });
+
       sendEvent('status', {
         message: `Interpreter intent: ${interpretation.primaryIntent} (${interpretation.intents.join(', ')})`,
       });
@@ -563,6 +579,15 @@ export async function generationRoutes(server: FastifyInstance) {
         // Continue without memory if retrieval fails
       }
 
+      // Enhanced memory injection debugging event
+      sendEvent('memory.injected', {
+        identity_chunks: identityContext ? 1 : 0,
+        chat_chunks: chatMemoryContext ? 1 : 0,
+        legacy_chunks: memoryContext ? 1 : 0,
+        web_search: !!webSearchContext,
+        memory_v2_enabled: env.MEMORY_V2_ENABLED,
+      });
+
       sendEvent('status', { message: 'Running triage...' });
 
       // 2. Run triage on last user message
@@ -683,7 +708,8 @@ export async function generationRoutes(server: FastifyInstance) {
           : undefined;
 
         // Try each model candidate for this iteration
-        for (const candidate of candidateModels) {
+        for (let candidateIndex = 0; candidateIndex < candidateModels.length; candidateIndex++) {
+          const candidate = candidateModels[candidateIndex];
           if (blockedProviders.has(candidate.provider)) {
             continue;
           }
@@ -751,6 +777,20 @@ export async function generationRoutes(server: FastifyInstance) {
               // Execute each tool
               for (const toolCall of toolCalls) {
                 const toolStartTime = Date.now();
+
+                // Parse and log tool arguments
+                let parsedArgs: any = {};
+                try {
+                  parsedArgs = JSON.parse(toolCall.arguments);
+                } catch (e) {
+                  // Leave as empty object if parsing fails
+                }
+
+                sendEvent('tool.arguments', {
+                  tool_call_id: toolCall.id,
+                  name: toolCall.name,
+                  arguments: parsedArgs,
+                });
 
                 sendEvent('tool.start', {
                   tool_call_id: toolCall.id,
@@ -828,13 +868,29 @@ export async function generationRoutes(server: FastifyInstance) {
           } catch (err) {
             lastProviderError = err;
             const errorMessage = err instanceof Error ? err.message : String(err);
-            if (/(googleautherror|invalid authentication|unauthorized|no route for that uri|not configured|api key|403|401)/i.test(errorMessage)) {
+            const isAuthError = /(googleautherror|invalid authentication|unauthorized|no route for that uri|not configured|api key|403|401)/i.test(errorMessage);
+
+            if (isAuthError) {
               blockedProviders.add(candidate.provider);
             }
+
             server.log.warn(
               { err, provider: candidate.provider, model: candidate.deploymentName },
               'Model run failed, trying fallback',
             );
+
+            // Structured provider error event
+            sendEvent('error', {
+              type: 'provider_failure',
+              provider: candidate.provider,
+              model: candidate.deploymentName,
+              error_message: errorMessage,
+              is_auth_error: isAuthError,
+              blocked: isAuthError,
+              retrying: candidateIndex < candidateModels.length - 1,
+              fallback_available: candidateIndex < candidateModels.length - 1,
+            });
+
             sendEvent('status', {
               message: `${candidate.displayName} unavailable, trying fallback...`,
             });

@@ -1,3 +1,4 @@
+pub mod animate;
 pub mod auth;
 pub mod billing;
 pub mod chat;

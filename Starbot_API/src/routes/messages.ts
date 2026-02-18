@@ -2,9 +2,18 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db.js';
+import { requireAuthIfEnabled, enforceRateLimitIfEnabled } from '../security/route-guards.js';
+import { env } from '../env.js';
 
+// Client-facing schema: only allow user and assistant messages
 const CreateMessageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'tool', 'system']),
+  role: z.enum(['user', 'assistant']),
+  content: z.string().min(1),
+});
+
+// Internal-only schema for tool and system messages (used by generation.ts)
+export const InternalMessageSchema = z.object({
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
   content: z.string().min(1),
 });
 
@@ -32,8 +41,28 @@ export async function messageRoutes(server: FastifyInstance) {
   server.post<{ Params: { chatId: string } }>(
     '/chats/:chatId/messages',
     async (request, reply) => {
+      // Authentication check
+      if (!requireAuthIfEnabled(request, reply)) {
+        return;
+      }
+
+      if (!enforceRateLimitIfEnabled(request, reply, {
+        routeKey: 'messages',
+        maxRequests: env.RATE_LIMIT_MESSAGES_PER_WINDOW,
+      })) {
+        return;
+      }
+
       const { chatId } = request.params;
-      const body = CreateMessageSchema.parse(request.body);
+      let body;
+      try {
+        body = CreateMessageSchema.parse(request.body);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.code(400).send({ error: 'Invalid request body', details: error.errors });
+        }
+        throw error;
+      }
 
       // Verify chat exists
       const chat = await prisma.chat.findUnique({
@@ -66,6 +95,17 @@ export async function messageRoutes(server: FastifyInstance) {
   server.put<{ Params: { id: string } }>(
     '/messages/:id',
     async (request, reply) => {
+      if (!requireAuthIfEnabled(request, reply)) {
+        return;
+      }
+
+      if (!enforceRateLimitIfEnabled(request, reply, {
+        routeKey: 'messages',
+        maxRequests: env.RATE_LIMIT_MESSAGES_PER_WINDOW,
+      })) {
+        return;
+      }
+
       const { id } = request.params;
       const body = UpdateMessageSchema.parse(request.body);
 
@@ -100,6 +140,17 @@ export async function messageRoutes(server: FastifyInstance) {
   server.delete<{ Params: { id: string } }>(
     '/messages/:id',
     async (request, reply) => {
+      if (!requireAuthIfEnabled(request, reply)) {
+        return;
+      }
+
+      if (!enforceRateLimitIfEnabled(request, reply, {
+        routeKey: 'messages',
+        maxRequests: env.RATE_LIMIT_MESSAGES_PER_WINDOW,
+      })) {
+        return;
+      }
+
       const { id } = request.params;
 
       const existingMessage = await prisma.message.findUnique({
@@ -130,6 +181,17 @@ export async function messageRoutes(server: FastifyInstance) {
   server.delete<{ Params: { chatId: string; messageId: string } }>(
     '/chats/:chatId/messages/after/:messageId',
     async (request, reply) => {
+      if (!requireAuthIfEnabled(request, reply)) {
+        return;
+      }
+
+      if (!enforceRateLimitIfEnabled(request, reply, {
+        routeKey: 'messages',
+        maxRequests: env.RATE_LIMIT_MESSAGES_PER_WINDOW,
+      })) {
+        return;
+      }
+
       const { chatId, messageId } = request.params;
 
       const target = await prisma.message.findUnique({

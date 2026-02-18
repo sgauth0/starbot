@@ -84,6 +84,11 @@ async function searchMemoryDocs(
             memoryId: doc.id,
             scope: doc.scope,
           });
+
+          // Early exit optimization: if we have enough high-quality results, stop scanning
+          if (results.length >= topK * 2 && similarity > 0.8) {
+            break;
+          }
         }
       } catch (error) {
         console.error(`Error parsing embedding for chunk ${chunk.id}:`, error);

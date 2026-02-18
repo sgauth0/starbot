@@ -58,27 +58,44 @@ function heuristicIntents(message: string): InterpreterIntent[] {
   const text = message.toLowerCase();
   const intents: InterpreterIntent[] = [];
 
+  // Filesystem intent detection
   if (
-    /\b(ls|pwd)\b/.test(text) ||
+    /\b(ls|pwd|cat|mkdir|rm|cp|mv)\b/.test(text) ||
     text.includes('directory') ||
     text.includes('folder') ||
     text.includes('files in') ||
     text.includes('file list') ||
-    text.includes('workspace')
+    text.includes('workspace') ||
+    text.includes('open file') ||
+    text.includes('read file') ||
+    text.includes('save as') ||
+    text.includes('write to') ||
+    text.includes('create file') ||
+    text.includes('delete file') ||
+    /\b(show|list|display)\s+(files?|contents?)\b/i.test(text)
   ) {
     intents.push('filesystem');
   }
 
+  // Browse/web search intent detection
   if (
     text.includes('browse') ||
     text.includes('search the web') ||
+    text.includes('search online') ||
+    text.includes('look up online') ||
+    text.includes('find online') ||
+    text.includes('google') ||
     text.includes('look up') ||
     text.includes('latest') ||
-    text.includes('news')
+    text.includes('news') ||
+    text.includes('current') ||
+    text.includes('today') ||
+    /what(?:'s| is) the (?:weather|time|date|price)/i.test(text)
   ) {
     intents.push('browse');
   }
 
+  // Code intent detection
   if (
     text.includes('code') ||
     text.includes('debug') ||
@@ -125,16 +142,25 @@ export async function interpretUserMessage(message: string): Promise<Interpretat
         {
           role: 'system',
           content:
-            'You are a request interpreter and router. Return JSON only. ' +
-            'Decide if the request is executable or needs clarification, and classify intent(s). ' +
-            'Schema: {"action":"execute|clarify","primary_intent":"chat|browse|filesystem|code|tool|clarify","intents":["chat|browse|filesystem|code|tool|clarify"],"normalized_user_message":"string","clarification_question":"string","confidence":0..1,"reason":"string"}. ' +
-            'Use primary_intent=browse for web lookup/research requests. ' +
-            'Use primary_intent=filesystem for local files/directories/workspace requests. ' +
-            'Use action=clarify only when critical details are missing to proceed safely.',
+            'You are a request interpreter and router. Return JSON only.\n\n' +
+            'Schema: {"action":"execute|clarify","primary_intent":"chat|browse|filesystem|code|tool|clarify","intents":["chat|browse|filesystem|code|tool|clarify"],"normalized_user_message":"string","clarification_question":"string","confidence":0..1,"reason":"string"}\n\n' +
+            'INSTRUCTIONS:\n' +
+            '- Use primary_intent=browse for web lookup/research/current info requests\n' +
+            '- Use primary_intent=filesystem for local files/directories/workspace requests\n' +
+            '- Use primary_intent=code for debugging/refactoring/programming tasks\n' +
+            '- Use primary_intent=chat for general knowledge/explanation questions (default)\n' +
+            '- Use action=clarify only when critical details are missing\n\n' +
+            'EXAMPLES:\n\n' +
+            '{"action":"execute","primary_intent":"browse","intents":["browse"],"normalized_user_message":"What\'s the weather in Paris?","confidence":0.95,"reason":"current_info_needed"}\n\n' +
+            '{"action":"execute","primary_intent":"filesystem","intents":["filesystem"],"normalized_user_message":"List files in src/","confidence":0.98,"reason":"filesystem_command"}\n\n' +
+            '{"action":"execute","primary_intent":"code","intents":["code"],"normalized_user_message":"Fix the bug in main.ts","confidence":0.85,"reason":"code_modification"}\n\n' +
+            '{"action":"execute","primary_intent":"chat","intents":["chat"],"normalized_user_message":"Explain recursion","confidence":0.9,"reason":"knowledge_query"}\n\n' +
+            '{"action":"clarify","primary_intent":"clarify","intents":["clarify"],"clarification_question":"What would you like me to do? Please provide more context.","confidence":0.4,"reason":"ambiguous_request"}\n\n' +
+            'Now classify this request:',
         },
         {
           role: 'user',
-          content: `User message:\n${original}`,
+          content: `${original}`,
         },
       ],
       {

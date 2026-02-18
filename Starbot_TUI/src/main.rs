@@ -11,6 +11,7 @@ mod tui;
 use clap::{Parser, Subcommand};
 
 use crate::app::Runtime;
+use crate::commands::animate::AnimateArgs;
 use crate::commands::auth::AuthCommand;
 use crate::commands::billing::BillingCommand;
 use crate::commands::chat::ChatArgs;
@@ -75,6 +76,7 @@ enum Commands {
         #[command(subcommand)]
         command: BillingCommand,
     },
+    Animate(AnimateArgs),
     Health,
 }
 
@@ -121,6 +123,7 @@ async fn run(cli: Cli, output: OutputMode) -> Result<(), CliError> {
         Commands::Tui(args) => commands::tui::handle(&runtime, args).await,
         Commands::Usage(args) => commands::usage::handle(&runtime, args).await,
         Commands::Billing { command } => commands::billing::handle(&runtime, command).await,
+        Commands::Animate(args) => commands::animate::handle(&runtime, args).await,
         Commands::Health => commands::health::handle(&runtime).await,
     }
 }

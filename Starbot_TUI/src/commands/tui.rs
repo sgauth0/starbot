@@ -1315,20 +1315,16 @@ fn render_stargazing_bar(app: &App) -> Paragraph<'static> {
         return Paragraph::new(Line::from(""));
     }
 
-    // From SPECS/LOADINGSPECS.md.
-    const SYMBOLS: &[&str] = &["✦", "✧", "✶", "✷", "✶", "✧"];
-    let sym = SYMBOLS[(app.spinner_step as usize) % SYMBOLS.len()];
-    let sym_style = match sym {
-        "✶" | "✷" => Style::default().fg(c_heart()).add_modifier(Modifier::BOLD),
-        _ => Style::default().fg(c_sparkle()).add_modifier(Modifier::BOLD),
-    };
+    // Animated loading frames: ▓ ▒ ░
+    const FRAMES: &[&str] = &["▓", "▒", "░", "▒"];
+    let frame = FRAMES[(app.spinner_step as usize) % FRAMES.len()];
 
     let line = Line::from(vec![
+        Span::styled(frame.to_string(), Style::default().fg(c_sparkle()).add_modifier(Modifier::BOLD)),
         Span::styled(
-            "stargazing… ",
+            " stargazing…",
             Style::default().fg(c_muted()).add_modifier(Modifier::DIM),
         ),
-        Span::styled(sym.to_string(), sym_style),
     ]);
 
     Paragraph::new(line).alignment(Alignment::Center)
