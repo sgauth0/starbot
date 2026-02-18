@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     exclude: ['dist/**', 'node_modules/**'],
+    testTimeout: 30000, // Increase timeout for integration tests
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

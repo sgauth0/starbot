@@ -1,6 +1,7 @@
 /**
  * Retrieval Service
  * Performs semantic search using cosine similarity
+ * Includes early-exit optimization for performance
  */
 
 import { prisma } from '../db.js';
