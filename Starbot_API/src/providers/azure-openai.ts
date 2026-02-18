@@ -1,17 +1,43 @@
 // Azure AI Services Provider
 // Uses direct REST API calls (Azure OpenAI uses standard OpenAI format)
 
-import type { Provider, ProviderMessage, ProviderOptions, ProviderResponse, StreamChunk } from './types.js';
+import type { Provider, ProviderMessage, ProviderOptions, ProviderResponse, StreamChunk, ToolCall } from './types.js';
 import { env } from '../env.js';
 
 export class AzureProvider implements Provider {
   name = 'azure';
 
-  private formatMessages(messages: ProviderMessage[]): Array<{ role: string; content: string }> {
-    return messages.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
+  private formatMessages(messages: ProviderMessage[]): Array<any> {
+    return messages.map(m => {
+      const formatted: any = {
+        role: m.role,
+        content: m.content,
+      };
+
+      // Add tool calls if present (for assistant messages)
+      if (m.tool_calls) {
+        formatted.tool_calls = m.tool_calls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: tc.arguments,
+          },
+        }));
+      }
+
+      // Add tool call ID if present (for tool result messages)
+      if (m.tool_call_id) {
+        formatted.tool_call_id = m.tool_call_id;
+      }
+
+      // Add tool name if present (for tool result messages)
+      if (m.name) {
+        formatted.name = m.name;
+      }
+
+      return formatted;
+    });
   }
 
   private getModelConfig(model: string, options: ProviderOptions) {
@@ -88,6 +114,17 @@ export class AzureProvider implements Provider {
     }
 
     const config = this.getModelConfig(options.model, options);
+    const requestBody: any = {
+      messages: this.formatMessages(messages),
+      ...config,
+      stream: true,
+    };
+
+    // Add tools to request if provided
+    if (options.tools && options.tools.length > 0) {
+      requestBody.tools = options.tools;
+      requestBody.tool_choice = options.tool_choice || 'auto';
+    }
 
     const url = `${env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${options.model}/chat/completions?api-version=2024-12-01-preview`;
 
@@ -97,11 +134,7 @@ export class AzureProvider implements Provider {
         'api-key': env.AZURE_OPENAI_API_KEY,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        messages: this.formatMessages(messages),
-        ...config,
-        stream: true,
-      }),
+      body: JSON.stringify(requestBody),
       signal: options.signal,
     });
 
@@ -119,6 +152,7 @@ export class AzureProvider implements Provider {
     let buffer = '';
     let promptTokens = 0;
     let completionTokens = 0;
+    let accumulatedToolCalls: Map<number, ToolCall> = new Map();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -134,10 +168,12 @@ export class AzureProvider implements Provider {
 
         const data = trimmed.slice(6);
         if (data === '[DONE]') {
-          // Send final usage if available
-          if (promptTokens > 0 || completionTokens > 0) {
+          // Send final usage and tool calls if available
+          const toolCalls = Array.from(accumulatedToolCalls.values());
+          if (promptTokens > 0 || completionTokens > 0 || toolCalls.length > 0) {
             yield {
               text: '',
+              tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
               usage: {
                 promptTokens,
                 completionTokens,
@@ -150,10 +186,42 @@ export class AzureProvider implements Provider {
 
         try {
           const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta?.content;
+          const delta = parsed.choices?.[0]?.delta;
 
-          if (delta) {
-            yield { text: delta };
+          // Handle text content
+          if (delta?.content) {
+            yield { text: delta.content };
+          }
+
+          // Handle tool calls in streaming
+          if (delta?.tool_calls) {
+            for (const toolCallDelta of delta.tool_calls) {
+              const index = toolCallDelta.index;
+              const existing = accumulatedToolCalls.get(index) || {
+                id: '',
+                name: '',
+                arguments: '',
+              };
+
+              if (toolCallDelta.id) existing.id = toolCallDelta.id;
+              if (toolCallDelta.function?.name) existing.name = toolCallDelta.function.name;
+              if (toolCallDelta.function?.arguments) {
+                existing.arguments += toolCallDelta.function.arguments;
+              }
+
+              accumulatedToolCalls.set(index, existing);
+            }
+          }
+
+          // Handle finish reason
+          const finishReason = parsed.choices?.[0]?.finish_reason;
+          if (finishReason) {
+            const toolCalls = Array.from(accumulatedToolCalls.values());
+            yield {
+              text: '',
+              tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+              finish_reason: finishReason,
+            };
           }
 
           // Azure sometimes includes usage in stream

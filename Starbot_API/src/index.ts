@@ -16,6 +16,7 @@ import { workspaceRoutes } from './routes/workspaces.js';
 import { memoryRoutes } from './routes/memory.js';
 import { authRoutes } from './routes/auth.js';
 import { inferenceRoutes } from './routes/inference.js';
+import { initializeTools } from './services/tools/index.js';
 
 const PORT = env.PORT;
 const HOST = env.HOST;
@@ -84,6 +85,9 @@ await server.register(workspaceRoutes, { prefix: '/v1' });
 await server.register(memoryRoutes, { prefix: '/v1' });
 await server.register(authRoutes, { prefix: '/v1' });
 await server.register(inferenceRoutes, { prefix: '/v1' });
+
+// Initialize tools
+initializeTools();
 
 // Start server
 try {

@@ -12,9 +12,11 @@ import {
 } from '../services/model-catalog.js';
 import { interpretUserMessage } from '../services/interpreter.js';
 import { getProvider } from '../providers/index.js';
+import type { ProviderMessage, ToolCall } from '../providers/types.js';
 import { getChatMemoryContext, getIdentityContext, getRelevantContext } from '../services/retrieval.js';
 import { formatWebSearchContext, searchWeb } from '../services/web-search.js';
 import { executeFilesystemRouterPrompt } from '../services/filesystem-router.js';
+import { toolRegistry } from '../services/tools/index.js';
 import { env } from '../env.js';
 import { enforceRateLimitIfEnabled, requireAuthIfEnabled } from '../security/route-guards.js';
 import * as fs from 'fs/promises';
@@ -608,7 +610,7 @@ export async function generationRoutes(server: FastifyInstance) {
       const candidateModels = [primaryModel, ...fallbackCandidates];
 
       // 5. Convert messages to provider format and inject memory
-      const providerMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+      const providerMessages: ProviderMessage[] = [];
 
       if (identityContext) {
         providerMessages.push({
@@ -641,69 +643,214 @@ export async function generationRoutes(server: FastifyInstance) {
 
       // Add conversation messages
       providerMessages.push(
-        ...chat.messages.map((m: { role: string; content: string }, idx: number) => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: idx === lastUserIndex ? interpretedUserMessage : m.content,
-        })),
+        ...chat.messages.map((m: { role: string; content: string }, idx: number) => {
+          // Handle tool result messages - convert to assistant message with tool result prefix
+          if (m.role === 'tool') {
+            return {
+              role: 'assistant' as const,
+              content: `[Tool Result]\n${m.content}`,
+            };
+          }
+          return {
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: idx === lastUserIndex ? interpretedUserMessage : m.content,
+          };
+        }),
       );
 
-      // 6. Stream response from provider with automatic model/provider failover
+      // 6. Determine if tools should be enabled for this session
+      const shouldUseTools = env.TOOLS_ENABLED && toolRegistry.getAll().length > 0;
+      const maxToolIterations = 5;
+      let toolIterations = 0;
+      let continueWithTools = true;
+
+      // 6a. Tool execution loop - multi-turn agentic system
       let fullResponse = '';
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       let selectedModel: ModelDefinition | null = null;
       let lastProviderError: unknown = null;
       const blockedProviders = new Set<string>();
 
-      for (const candidate of candidateModels) {
-        if (blockedProviders.has(candidate.provider)) {
-          continue;
+      while (continueWithTools && toolIterations < maxToolIterations) {
+        toolIterations++;
+
+        // Prepare tool definitions for this iteration
+        const toolDefinitions = shouldUseTools
+          ? toolRegistry.toOpenAIFunctions().map(fn => ({
+              type: 'function' as const,
+              function: fn,
+            }))
+          : undefined;
+
+        // Try each model candidate for this iteration
+        for (const candidate of candidateModels) {
+          if (blockedProviders.has(candidate.provider)) {
+            continue;
+          }
+
+          if (toolIterations === 1) {
+            sendEvent('status', {
+              message: `Using ${candidate.displayName} (${candidate.provider})...`,
+            });
+          } else {
+            sendEvent('status', {
+              message: `Continuing with ${candidate.displayName} (tool iteration ${toolIterations})...`,
+            });
+          }
+
+          try {
+            const provider = getProvider(candidate.provider);
+            fullResponse = '';
+            usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+            let toolCalls: ToolCall[] = [];
+            let finishReason: string | undefined;
+
+            // Stream from LLM
+            for await (const chunk of provider.sendChatStream(providerMessages, {
+              model: candidate.deploymentName,
+              maxTokens: body.speed
+                ? Math.min(candidate.maxOutputTokens, 1024)
+                : candidate.maxOutputTokens,
+              temperature: 0.7,
+              tools: toolDefinitions,
+              tool_choice: shouldUseTools ? 'auto' : undefined,
+            })) {
+              if (chunk.text) {
+                fullResponse += chunk.text;
+                sendEvent('token.delta', { text: chunk.text });
+              }
+
+              if (chunk.tool_calls) {
+                toolCalls = chunk.tool_calls;
+              }
+
+              if (chunk.finish_reason) {
+                finishReason = chunk.finish_reason;
+              }
+
+              if (chunk.usage) {
+                usage = chunk.usage;
+              }
+            }
+
+            if (!fullResponse.trim() && toolCalls.length === 0) {
+              throw new Error(`Model "${candidate.displayName}" returned an empty response`);
+            }
+
+            selectedModel = candidate;
+
+            // Check if we need to execute tools
+            if (finishReason === 'tool_calls' && toolCalls.length > 0) {
+              // Add assistant message with tool calls to conversation
+              providerMessages.push({
+                role: 'assistant',
+                content: fullResponse || '',
+                tool_calls: toolCalls,
+              });
+
+              // Execute each tool
+              for (const toolCall of toolCalls) {
+                const toolStartTime = Date.now();
+
+                sendEvent('tool.start', {
+                  tool_call_id: toolCall.id,
+                  tool_name: toolCall.name,
+                  arguments: toolCall.arguments,
+                });
+
+                const tool = toolRegistry.get(toolCall.name);
+                if (!tool) {
+                  const errorResult = JSON.stringify({ error: 'Tool not found' });
+
+                  providerMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    name: toolCall.name,
+                    content: errorResult,
+                  });
+
+                  sendEvent('tool.end', {
+                    tool_call_id: toolCall.id,
+                    tool_name: toolCall.name,
+                    success: false,
+                    error: 'Tool not found',
+                  });
+
+                  continue;
+                }
+
+                try {
+                  const args = JSON.parse(toolCall.arguments);
+                  const result = await tool.execute(args);
+                  const toolDurationMs = Date.now() - toolStartTime;
+
+                  // Add tool result to provider messages
+                  providerMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    name: toolCall.name,
+                    content: result.content,
+                  });
+
+                  sendEvent('tool.end', {
+                    tool_call_id: toolCall.id,
+                    tool_name: toolCall.name,
+                    success: result.success,
+                    duration_ms: toolDurationMs,
+                    preview: result.content.slice(0, 200),
+                  });
+                } catch (error) {
+                  const errorMessage = error instanceof Error ? error.message : String(error);
+
+                  providerMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    name: toolCall.name,
+                    content: JSON.stringify({ error: errorMessage }),
+                  });
+
+                  sendEvent('tool.end', {
+                    tool_call_id: toolCall.id,
+                    tool_name: toolCall.name,
+                    success: false,
+                    error: errorMessage,
+                  });
+                }
+              }
+
+              // Continue loop to get final response from LLM
+              continue;
+            }
+
+            // No tool calls or reached stop - exit loop and save response
+            continueWithTools = false;
+            break;
+          } catch (err) {
+            lastProviderError = err;
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            if (/(googleautherror|invalid authentication|unauthorized|no route for that uri|not configured|api key|403|401)/i.test(errorMessage)) {
+              blockedProviders.add(candidate.provider);
+            }
+            server.log.warn(
+              { err, provider: candidate.provider, model: candidate.deploymentName },
+              'Model run failed, trying fallback',
+            );
+            sendEvent('status', {
+              message: `${candidate.displayName} unavailable, trying fallback...`,
+            });
+          }
         }
 
-        sendEvent('status', {
-          message: `Using ${candidate.displayName} (${candidate.provider})...`,
-        });
-
-        try {
-          const provider = getProvider(candidate.provider);
-          fullResponse = '';
-          usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-
-          for await (const chunk of provider.sendChatStream(providerMessages, {
-            model: candidate.deploymentName,
-            maxTokens: body.speed
-              ? Math.min(candidate.maxOutputTokens, 1024)
-              : candidate.maxOutputTokens,
-            temperature: 0.7,
-          })) {
-            if (chunk.text) {
-              fullResponse += chunk.text;
-              sendEvent('token.delta', { text: chunk.text });
-            }
-
-            if (chunk.usage) {
-              usage = chunk.usage;
-            }
-          }
-
-          if (!fullResponse.trim()) {
-            throw new Error(`Model "${candidate.displayName}" returned an empty response`);
-          }
-
-          selectedModel = candidate;
-          break;
-        } catch (err) {
-          lastProviderError = err;
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          if (/(googleautherror|invalid authentication|unauthorized|no route for that uri|not configured|api key|403|401)/i.test(errorMessage)) {
-            blockedProviders.add(candidate.provider);
-          }
-          server.log.warn(
-            { err, provider: candidate.provider, model: candidate.deploymentName },
-            'Model run failed, trying fallback',
+        if (!selectedModel && toolIterations === 1) {
+          throw (
+            lastProviderError instanceof Error
+              ? lastProviderError
+              : new Error('All configured models failed to respond')
           );
-          sendEvent('status', {
-            message: `${candidate.displayName} unavailable, trying fallback...`,
-          });
+        }
+
+        if (!continueWithTools) {
+          break;
         }
       }
 

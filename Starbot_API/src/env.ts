@@ -52,6 +52,7 @@ export const env = {
 
   // Features
   TOOLS_ENABLED: process.env.TOOLS_ENABLED !== 'false', // Default true
+  CODE_EXECUTION_ENABLED: process.env.CODE_EXECUTION_ENABLED === 'true', // Default false for security
   WEB_SEARCH_ENABLED: process.env.WEB_SEARCH_ENABLED === 'true',
   WEB_SEARCH_API_KEY: process.env.WEB_SEARCH_API_KEY || '',
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || '',
@@ -101,6 +102,9 @@ export function logConfiguration() {
   console.log(`  Server: ${env.HOST}:${env.PORT}`);
   console.log(`  Configured providers: ${configured.join(', ') || 'none'}`);
   console.log(`  Tools enabled: ${env.TOOLS_ENABLED}`);
+  if (env.CODE_EXECUTION_ENABLED) {
+    console.log(`  ⚠️  CODE EXECUTION ENABLED - Use with caution!`);
+  }
   console.log(`  Web search enabled: ${env.WEB_SEARCH_ENABLED}`);
   console.log(`  Memory V2 enabled: ${env.MEMORY_V2_ENABLED}`);
   console.log(`  Interpreter enabled: ${env.INTERPRETER_ENABLED}`);
