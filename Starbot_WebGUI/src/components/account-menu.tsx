@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CircleUserRound, LogIn, LogOut, Settings, TerminalSquare, UserRound } from 'lucide-react';
+import { CircleUserRound, LogIn, LogOut, Settings, ShieldCheck, TerminalSquare, UserRound } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,7 +14,15 @@ import {
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/store/ui-store';
 import { toast } from 'sonner';
-import { AUTH_CHANGED_EVENT, clearAuthSession, readAuthSession, type AuthSession } from '@/lib/auth-session';
+import {
+  AUTH_CHANGED_EVENT,
+  clearAuthSession,
+  clearServerSession,
+  readAuthSession,
+  type AuthSession,
+} from '@/lib/auth-session';
+
+const ADMIN_CONSOLE_URL = process.env.NEXT_PUBLIC_ADMIN_CONSOLE_URL || 'https://console.starbot.cloud';
 
 export function AccountMenu() {
   const router = useRouter();
@@ -49,10 +57,17 @@ export function AccountMenu() {
       .join('') || 'G';
   }, [session]);
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    await clearServerSession();
     clearAuthSession();
     toast.success('Signed out');
     router.push('/login');
+  };
+
+  const openAdminConsole = () => {
+    if (typeof window !== 'undefined') {
+      window.location.href = ADMIN_CONSOLE_URL;
+    }
   };
 
   return (
@@ -93,6 +108,13 @@ export function AccountMenu() {
           <TerminalSquare className="mr-2 h-4 w-4" />
           Diagnostics
         </DropdownMenuItem>
+
+        {session?.role === 'admin' && (
+          <DropdownMenuItem onClick={openAdminConsole}>
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Admin Console
+          </DropdownMenuItem>
+        )}
 
         {session && (
           <>

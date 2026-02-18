@@ -147,12 +147,14 @@ export async function messageRoutes(server: FastifyInstance) {
         select: { id: true },
       });
 
-      const startIndex = orderedMessages.findIndex((m) => m.id === messageId);
+      const startIndex = orderedMessages.findIndex((m: { id: string }) => m.id === messageId);
       if (startIndex < 0) {
         return reply.code(404).send({ error: 'Message not found in chat' });
       }
 
-      const idsToDelete = orderedMessages.slice(startIndex).map((m) => m.id);
+      const idsToDelete = orderedMessages
+        .slice(startIndex)
+        .map((m: { id: string }) => m.id);
       const updatedAt = new Date();
 
       const [deleteResult] = await prisma.$transaction([

@@ -314,11 +314,17 @@ fn join_url(base_url: &str, path: &str) -> String {
     if path.starts_with("http://") || path.starts_with("https://") {
         return path.to_string();
     }
-    format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    )
+
+    let trimmed_path = path.trim_start_matches('/');
+    let mut base = base_url.trim_end_matches('/').to_string();
+
+    // Guard against configs that include a "/v1" suffix while callers also pass "/v1/*" paths.
+    if base.ends_with("/v1") && trimmed_path.starts_with("v1/") {
+        base.truncate(base.len().saturating_sub(3));
+        base = base.trim_end_matches('/').to_string();
+    }
+
+    format!("{base}/{trimmed_path}")
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {

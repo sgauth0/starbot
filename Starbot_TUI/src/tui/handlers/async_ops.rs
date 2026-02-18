@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::api::{ApiClient, ApiResponse};
-use crate::tui::types::{ChatMsg, ChatRole, TuiMsg};
+use crate::tui::types::{ChatMsg, ChatRole, TuiMsg, Completion};
 
 pub fn spawn_health_fetch(api: ApiClient, tx: mpsc::UnboundedSender<TuiMsg>) {
     tokio::spawn(async move {
@@ -379,6 +379,7 @@ pub fn spawn_chat_request_stream_legacy(
     messages: Vec<ChatMsg>,
     workspace_id: Option<String>,
     active_thread_id: Option<String>,
+    working_dir: String,
 ) {
     tokio::spawn(async move {
         let Some(prompt) = extract_last_user_prompt(&messages) else {
@@ -466,30 +467,79 @@ pub fn spawn_chat_request_stream_legacy(
             }
         }
 
-        let Some(chat_id) = chat_id else {
+        let Some(mut chat_id) = chat_id else {
             let _ = tx.send(TuiMsg::StreamError(
                 "No chat available for streaming.".to_string(),
             ));
             return;
         };
 
-        let add_message_path = format!("/v1/chats/{chat_id}/messages");
-        let add_message_body = json!({
-            "role": "user",
-            "content": prompt,
-        });
-        if let Err(err) = api
-            .post_json(&add_message_path, Some(add_message_body), false)
-            .await
-        {
-            let _ = tx.send(TuiMsg::StreamError(format!("Failed to add user message: {err}")));
-            return;
+        // If the active chat ID points to a deleted/missing chat, recover by creating a new chat once.
+        let mut recovered_missing_chat = false;
+        loop {
+            let add_message_path = format!("/v1/chats/{chat_id}/messages");
+            let add_message_body = json!({
+                "role": "user",
+                "content": prompt,
+            });
+
+            match api
+                .post_json(&add_message_path, Some(add_message_body), false)
+                .await
+            {
+                Ok(_) => break,
+                Err(err) => {
+                    let err_text = err.to_string();
+                    if !recovered_missing_chat
+                        && err_text.to_ascii_lowercase().contains("not found")
+                    {
+                        recovered_missing_chat = true;
+                        let path = format!("/v1/projects/{project_id}/chats");
+                        let title = default_chat_title(&prompt);
+                        match api.post_json(&path, Some(json!({ "title": title })), false).await {
+                            Ok(resp) => {
+                                if let Some(new_chat_id) = resp
+                                    .json
+                                    .get("chat")
+                                    .and_then(|v| v.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(|s| s.to_string())
+                                {
+                                    chat_id = new_chat_id;
+                                    continue;
+                                }
+                                let _ = tx.send(TuiMsg::StreamError(
+                                    "Failed to recover missing chat: new chat id was empty."
+                                        .to_string(),
+                                ));
+                                return;
+                            }
+                            Err(create_err) => {
+                                let _ = tx.send(TuiMsg::StreamError(format!(
+                                    "Failed to recover missing chat: {create_err}"
+                                )));
+                                return;
+                            }
+                        }
+                    }
+
+                    let _ = tx.send(TuiMsg::StreamError(format!(
+                        "Failed to add user message: {err}"
+                    )));
+                    return;
+                }
+            }
         }
 
         let mut run_body = json!({
             "mode": "standard",
             "speed": false,
             "auto": true,
+            "client_context": {
+                "working_dir": working_dir,
+            }
         });
         if let Some(model_prefs) = build_model_prefs(&provider, model.as_deref()) {
             run_body["model_prefs"] = json!(model_prefs);
@@ -640,4 +690,40 @@ fn build_model_prefs(provider: &str, model: Option<&str>) -> Option<String> {
         Some(model_name) => Some(format!("{provider}:{model_name}")),
         None => Some(provider),
     }
+}
+
+pub fn spawn_completion_request(
+    api: ApiClient,
+    tx: mpsc::UnboundedSender<TuiMsg>,
+    file_path: String,
+    content: String,
+    cursor_pos: (usize, usize),
+) {
+    tokio::spawn(async move {
+        let body = json!({
+            "file_path": file_path,
+            "content": content,
+            "cursor_position": {
+                "line": cursor_pos.0,
+                "column": cursor_pos.1,
+            },
+            "max_suggestions": 3,
+        });
+
+        let res = api.post_json("/v1/completion", Some(body), false).await;
+        let _ = tx.send(TuiMsg::CompletionRequest(file_path, res));
+    });
+}
+
+pub fn spawn_file_list_fetch(api: ApiClient, tx: mpsc::UnboundedSender<TuiMsg>, workspace_id: String, path: String) {
+    tokio::spawn(async move {
+        let workspace_id_clone = workspace_id.clone();
+        let path_clone = path.clone();
+        let query = vec![
+            ("workspace_id".to_string(), workspace_id),
+            ("path".to_string(), path),
+        ];
+        let res = api.get_json("/v1/files/list", Some(&query), false).await;
+        let _ = tx.send(TuiMsg::FileListRequest(workspace_id_clone, path_clone, res));
+    });
 }

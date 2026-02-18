@@ -14,6 +14,26 @@ starbot.cloud, www.starbot.cloud {
 
   # WebGUI routes
   handle {
-    reverse_proxy docklite-site-starbot-web:3001
+    reverse_proxy docklite-site-starbot-web:3001 {
+      header_up Host {host}
+    }
+  }
+}
+
+console.starbot.cloud {
+  # API routes (host service)
+  handle /v1/* {
+    reverse_proxy 172.21.0.1:3737
+  }
+
+  handle /health {
+    reverse_proxy 172.21.0.1:3737
+  }
+
+  # Admin console (host-aware rewrite to /admin handled in Next middleware)
+  handle {
+    reverse_proxy docklite-site-starbot-web:3001 {
+      header_up Host {host}
+    }
   }
 }

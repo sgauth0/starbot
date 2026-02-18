@@ -40,6 +40,12 @@ export const env = {
   // Cloudflare Workers AI
   CLOUDFLARE_ACCOUNT_ID: strEnv(process.env.CLOUDFLARE_ACCOUNT_ID),
   CLOUDFLARE_API_TOKEN: strEnv(process.env.CLOUDFLARE_API_TOKEN),
+  INTERPRETER_ENABLED: process.env.INTERPRETER_ENABLED !== 'false',
+  INTERPRETER_MODEL: strEnv(
+    process.env.INTERPRETER_MODEL,
+    '@cf/mistralai/mistral-small-3.1-24b-instruct',
+  ),
+  INTERPRETER_MAX_TOKENS: parseInt(process.env.INTERPRETER_MAX_TOKENS || '220', 10),
 
   // Triage
   TRIAGE_MODEL_ENABLED: process.env.TRIAGE_MODEL_ENABLED === 'true',
@@ -49,11 +55,16 @@ export const env = {
   WEB_SEARCH_ENABLED: process.env.WEB_SEARCH_ENABLED === 'true',
   WEB_SEARCH_API_KEY: process.env.WEB_SEARCH_API_KEY || '',
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || '',
+  MEMORY_V2_ENABLED: process.env.MEMORY_V2_ENABLED === 'true',
   AUTH_ENFORCEMENT_ENABLED: process.env.AUTH_ENFORCEMENT_ENABLED === 'true',
   RATE_LIMITING_ENABLED: process.env.RATE_LIMITING_ENABLED === 'true',
   RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
   RATE_LIMIT_RUN_PER_WINDOW: parseInt(process.env.RATE_LIMIT_RUN_PER_WINDOW || '8', 10),
   RATE_LIMIT_INFERENCE_PER_WINDOW: parseInt(process.env.RATE_LIMIT_INFERENCE_PER_WINDOW || '30', 10),
+  RATE_LIMIT_COMPLETION_PER_WINDOW: parseInt(
+    process.env.RATE_LIMIT_COMPLETION_PER_WINDOW || '60',
+    10,
+  ),
 
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
@@ -91,6 +102,9 @@ export function logConfiguration() {
   console.log(`  Configured providers: ${configured.join(', ') || 'none'}`);
   console.log(`  Tools enabled: ${env.TOOLS_ENABLED}`);
   console.log(`  Web search enabled: ${env.WEB_SEARCH_ENABLED}`);
+  console.log(`  Memory V2 enabled: ${env.MEMORY_V2_ENABLED}`);
+  console.log(`  Interpreter enabled: ${env.INTERPRETER_ENABLED}`);
+  console.log(`  Interpreter model: ${env.INTERPRETER_MODEL}`);
   console.log(`  Triage model enabled: ${env.TRIAGE_MODEL_ENABLED}`);
   console.log(`  Auth enforcement enabled: ${env.AUTH_ENFORCEMENT_ENABLED}`);
   console.log(`  Rate limiting enabled: ${env.RATE_LIMITING_ENABLED}`);

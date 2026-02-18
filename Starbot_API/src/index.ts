@@ -42,8 +42,20 @@ await server.register(cors, {
     'http://127.0.0.1:3000',
     'https://starbot.cloud',      // Production
     'https://www.starbot.cloud',  // Production (www)
+    'https://sgauth0.com',
+    'https://www.sgauth0.com',
+    'https://console.sgauth0.com',
+    'https://www.console.sgauth0.com',
+    'https://console.starbot.cloud',
+    'https://www.console.starbot.cloud',
     'http://starbot.cloud',       // Production (HTTP before SSL)
     'http://www.starbot.cloud',
+    'http://sgauth0.com',
+    'http://www.sgauth0.com',
+    'http://console.sgauth0.com',
+    'http://www.console.sgauth0.com',
+    'http://console.starbot.cloud',
+    'http://www.console.starbot.cloud',
   ],
   credentials: true,
 });

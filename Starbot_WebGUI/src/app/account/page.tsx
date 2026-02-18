@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Clock3, Mail, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { AUTH_CHANGED_EVENT, clearAuthSession, readAuthSession, type AuthSession } from '@/lib/auth-session';
+import {
+  AUTH_CHANGED_EVENT,
+  clearAuthSession,
+  clearServerSession,
+  readAuthSession,
+  type AuthSession,
+} from '@/lib/auth-session';
 
 export default function AccountPage() {
   const router = useRouter();
@@ -73,13 +79,19 @@ export default function AccountPage() {
               {new Date(session.loggedInAt).toLocaleString()}
             </p>
           </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Role</p>
+            <p className="mt-1 text-sm text-slate-900">{session.role || 'user'}</p>
+          </div>
         </div>
 
         <div className="mt-8">
           <Button
             variant="outline"
             className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
-            onClick={() => {
+            onClick={async () => {
+              await clearServerSession();
               clearAuthSession();
               router.push('/login');
             }}

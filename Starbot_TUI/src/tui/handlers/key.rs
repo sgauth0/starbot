@@ -1,23 +1,454 @@
 // PHASE 3: TUI key handler extracted from tui.rs
 // Contains handle_event and handle_key functions for keyboard input
 
-use std::time::Instant;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
+use std::fs;
+use std::path::PathBuf;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::api::ApiClient;
 use crate::config::{profile_mut, save_config};
+
+// Helper functions
+fn parent_directory(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let components: Vec<&str> = path.split('/').collect();
+    if components.len() > 1 {
+        Some(components[..components.len() - 1].join("/"))
+    } else {
+        Some(".".to_string())
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let kb = bytes as f64 / 1024.0;
+    if kb < 1024.0 {
+        return format!("{kb:.1} KB");
+    }
+    let mb = kb / 1024.0;
+    if mb < 1024.0 {
+        return format!("{mb:.1} MB");
+    }
+    let gb = mb / 1024.0;
+    format!("{gb:.1} GB")
+}
+
+fn parse_local_list_target(prompt: &str) -> Option<String> {
+    let trimmed = prompt.trim();
+    let trimmed = trimmed.trim_end_matches(['?', '!', '.']);
+
+    if let Some(rest) = trimmed.strip_prefix("/ls") {
+        let target = rest.trim();
+        if !target.is_empty() {
+            return Some(target.to_string());
+        }
+        return None;
+    }
+
+    if trimmed == "ls" {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("ls ") {
+        let target = rest.trim();
+        if !target.is_empty() {
+            return Some(target.to_string());
+        }
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let natural_prefixes = [
+        "what's in the ",
+        "whats in the ",
+        "what is in the ",
+        "what's in ",
+        "whats in ",
+        "what is in ",
+        "show me ",
+        "list ",
+        "look in ",
+        "look inside ",
+    ];
+    let natural_suffixes = [
+        " folder",
+        " directory",
+        " dir",
+        " files",
+        " file",
+        " contents",
+        " content",
+    ];
+
+    for prefix in natural_prefixes {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let mut candidate = rest.trim().to_string();
+            if let Some(after_the) = candidate.strip_prefix("the ") {
+                candidate = after_the.trim().to_string();
+            }
+            for suffix in natural_suffixes {
+                if let Some(base) = candidate.strip_suffix(suffix) {
+                    candidate = base.trim().to_string();
+                    break;
+                }
+            }
+            candidate = candidate
+                .trim_matches('`')
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim()
+                .to_string();
+            if !candidate.is_empty()
+                && candidate != "here"
+                && candidate != "in here"
+                && candidate != "this directory"
+                && candidate != "this dir"
+            {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn is_local_pwd_request(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Prefer listing behavior when a prompt can be interpreted as directory contents.
+    if is_local_list_request(trimmed) {
+        return false;
+    }
+
+    if trimmed == "pwd" || trimmed == "/pwd" {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    [
+        "what directory are we in",
+        "what dir are we in",
+        "what folder are we in",
+        "where are we",
+        "where am i",
+        "current directory",
+        "current dir",
+        "working directory",
+        "show current directory",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn is_local_list_request(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if trimmed == "ls" || trimmed.starts_with("ls ") || trimmed.starts_with("/ls") {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    [
+        "list directory",
+        "directory contents",
+        "show directory",
+        "show dir",
+        "list dir",
+        "this dir",
+        "in this dir",
+        "what's in this dir",
+        "whats in this dir",
+        "what is in this dir",
+        "can we even look at files in here",
+        "can we look at files in here",
+        "can you access files",
+        "do you have access to files",
+        "can you see files",
+        "look at files",
+        "look at the files",
+        "look at files in here",
+        "look at the files in here",
+        "look in there",
+        "look in here",
+        "show current directory",
+        "list current directory",
+        "files in here",
+        "files here",
+        "what files are here",
+        "list files in this directory",
+        "show files in this directory",
+        "show contents",
+        "show the contents",
+        "directory content",
+        "what is in this directory",
+        "what's in this directory",
+        "whats in this directory",
+        "what are the contents",
+        "what's the contents",
+        "what is the contents",
+        "tell me what the contents are",
+        "contents of our working directory",
+        "contents of the working directory",
+        "contents of current directory",
+        "current folder contents",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || ((lower.contains("what's in")
+            || lower.contains("whats in")
+            || lower.contains("what is in")
+            || lower.contains("look in")
+            || lower.contains("look inside")
+            || lower.contains("show me")
+            || lower.contains("list"))
+            && (lower.contains("folder")
+                || lower.contains("directory")
+                || lower.contains(" dir")
+                || lower.ends_with("dir")))
+        || (lower.contains("contents")
+            && (lower.contains("working directory")
+                || lower.contains("current directory")
+                || lower.contains("our working directory")
+                || lower.contains("our directory")
+                || lower.contains("folder")
+                || lower.contains("directory")
+                || lower.contains(" dir")
+                || lower.contains("here")
+                || lower.contains("there")
+                || lower.contains("current")
+                || lower.contains("our")))
+        || ((lower.contains("files") || lower.contains("directory") || lower.contains("folder"))
+            && (lower.contains("here")
+                || lower.contains("in here")
+                || lower.contains("this directory"))
+            && (lower.contains("look")
+                || lower.contains("access")
+                || lower.contains("list")
+                || lower.contains("show")
+                || lower.contains("what")))
+        || ((lower.contains("dir") || lower.contains("directory") || lower.contains("folder"))
+            && (lower.contains("here")
+                || lower.contains("in here")
+                || lower.contains("this dir")
+                || lower.contains("this directory"))
+            && (lower.contains("look")
+                || lower.contains("access")
+                || lower.contains("list")
+                || lower.contains("show")
+                || lower.contains("what")
+                || lower.contains("what's")
+                || lower.contains("whats")))
+        || (lower.starts_with("of ")
+            && (lower.contains("working directory")
+                || lower.contains("current directory")
+                || lower.contains("our directory")
+                || lower.contains("this directory")
+                || lower.contains("this dir")))
+}
+
+fn is_local_access_request(prompt: &str) -> bool {
+    let lower = prompt.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    (lower.contains("access")
+        || lower.contains("see")
+        || lower.contains("read")
+        || lower.contains("view"))
+        && (lower.contains("file")
+            || lower.contains("files")
+            || lower.contains("directory")
+            || lower.contains("folder")
+            || lower.contains("filesystem"))
+}
+
+fn render_local_dir_listing(working_dir: &str, prompt: &str) -> Option<String> {
+    if !is_local_list_request(prompt) {
+        return None;
+    }
+
+    let target = parse_local_list_target(prompt);
+    let target_path = match target {
+        Some(raw) => {
+            let candidate = PathBuf::from(raw);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                PathBuf::from(working_dir).join(candidate)
+            }
+        }
+        None => PathBuf::from(working_dir),
+    };
+
+    let entries = match fs::read_dir(&target_path) {
+        Ok(v) => v,
+        Err(err) => {
+            return Some(format!(
+                "Local directory listing failed for `{}`: {}",
+                target_path.display(),
+                err
+            ));
+        }
+    };
+
+    let mut dirs: Vec<(String, Option<u64>)> = Vec::new();
+    let mut files: Vec<(String, Option<u64>)> = Vec::new();
+    let mut other: Vec<(String, Option<u64>)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        let file_type = entry.file_type().ok();
+        let bytes = fs::metadata(entry.path()).ok().map(|m| m.len());
+
+        if file_type.map(|t| t.is_dir()).unwrap_or(false) {
+            dirs.push((name, bytes));
+        } else if file_type.map(|t| t.is_file()).unwrap_or(false) {
+            files.push((name, bytes));
+        } else {
+            other.push((name, bytes));
+        }
+    }
+
+    dirs.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+    files.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+    other.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+
+    const MAX_PER_GROUP: usize = 80;
+    let truncated =
+        dirs.len() > MAX_PER_GROUP || files.len() > MAX_PER_GROUP || other.len() > MAX_PER_GROUP;
+
+    let mut out = Vec::new();
+    let total = dirs.len() + files.len() + other.len();
+    out.push(format!(
+        "Local directory listing for `{}` ({} entries{}):",
+        target_path.display(),
+        total,
+        if truncated { ", truncated" } else { "" }
+    ));
+
+    let mut push_group = |label: &str, group: &[(String, Option<u64>)], is_dir: bool| {
+        if group.is_empty() {
+            return;
+        }
+        out.push(String::new());
+        out.push(format!("{label}:"));
+        for (name, size) in group.iter().take(MAX_PER_GROUP) {
+            let suffix = if is_dir && !name.ends_with('/') {
+                "/"
+            } else {
+                ""
+            };
+            match size {
+                Some(bytes) => out.push(format!("- {name}{suffix} ({})", format_file_size(*bytes))),
+                None => out.push(format!("- {name}{suffix}")),
+            }
+        }
+        if group.len() > MAX_PER_GROUP {
+            out.push("- ...".to_string());
+        }
+    };
+
+    push_group("Folders", &dirs, true);
+    push_group("Files", &files, false);
+    push_group("Other", &other, false);
+
+    Some(out.join("\n"))
+}
+
+fn handle_local_pwd_prompt(app: &mut App, prompt: &str) -> bool {
+    if !is_local_pwd_request(prompt) {
+        return false;
+    }
+
+    app.messages.push(ChatMsg {
+        role: ChatRole::User,
+        content: prompt.to_string(),
+        sendable: true,
+    });
+    app.messages.push(ChatMsg {
+        role: ChatRole::Assistant,
+        content: format!("Current working directory:\n`{}`", app.working_dir),
+        sendable: true,
+    });
+    app.status = "Reported local working directory.".to_string();
+    app.input.clear();
+    app.cursor = 0;
+    true
+}
+
+fn handle_local_dir_prompt(app: &mut App, prompt: &str) -> bool {
+    let Some(listing) = render_local_dir_listing(&app.working_dir, prompt) else {
+        return false;
+    };
+
+    app.messages.push(ChatMsg {
+        role: ChatRole::User,
+        content: prompt.to_string(),
+        sendable: true,
+    });
+    app.messages.push(ChatMsg {
+        role: ChatRole::Assistant,
+        content: listing,
+        sendable: true,
+    });
+    app.status = "Listed local directory.".to_string();
+    app.input.clear();
+    app.cursor = 0;
+    true
+}
+
+fn handle_local_access_prompt(app: &mut App, prompt: &str) -> bool {
+    if !is_local_access_request(prompt) {
+        return false;
+    }
+
+    let mut content = format!(
+        "Yes. I have local access to files in:\n`{}`",
+        app.working_dir
+    );
+    if let Some(listing) = render_local_dir_listing(&app.working_dir, "ls") {
+        content.push_str("\n\n");
+        content.push_str(&listing);
+    }
+
+    app.messages.push(ChatMsg {
+        role: ChatRole::User,
+        content: prompt.to_string(),
+        sendable: true,
+    });
+    app.messages.push(ChatMsg {
+        role: ChatRole::Assistant,
+        content,
+        sendable: true,
+    });
+    app.status = "Confirmed local file access.".to_string();
+    app.input.clear();
+    app.cursor = 0;
+    true
+}
 use crate::cute::CuteMode;
 use crate::errors::CliError;
 use crate::tui::types::{
-    App, TuiMsg, ChatMsg, ChatRole, Mode, ChoiceAction, TextPromptState, ToolApprovalEntry,
+    App, ChatMsg, ChatRole, ChoiceAction, Mode, TextPromptState, ToolApprovalEntry, TuiMsg,
 };
 
 use super::async_ops::{
-    spawn_models_fetch, spawn_health_fetch, spawn_workspaces_fetch, spawn_threads_fetch,
-    spawn_memory_fetch, spawn_memory_settings_fetch, spawn_memory_toggle,
-    spawn_chat_request_stream_legacy, spawn_tool_propose,
+    spawn_chat_request_stream_legacy, spawn_completion_request, spawn_file_list_fetch,
+    spawn_health_fetch, spawn_memory_fetch, spawn_memory_settings_fetch, spawn_memory_toggle,
+    spawn_models_fetch, spawn_threads_fetch, spawn_tool_propose, spawn_workspaces_fetch,
 };
 
 // Import helper functions from parent tui module
@@ -195,12 +626,8 @@ pub fn handle_key(
         Mode::ThreadPicker => {
             match key.code {
                 KeyCode::Esc => app.mode = Mode::Chat,
-                KeyCode::Up => {
-                    move_selection(&mut app.thread_state, -1, app.thread_options.len())
-                }
-                KeyCode::Down => {
-                    move_selection(&mut app.thread_state, 1, app.thread_options.len())
-                }
+                KeyCode::Up => move_selection(&mut app.thread_state, -1, app.thread_options.len()),
+                KeyCode::Down => move_selection(&mut app.thread_state, 1, app.thread_options.len()),
                 KeyCode::PageUp => {
                     move_selection(&mut app.thread_state, -5, app.thread_options.len())
                 }
@@ -226,12 +653,8 @@ pub fn handle_key(
         Mode::MemoryPanel => {
             match key.code {
                 KeyCode::Esc => app.mode = Mode::Chat,
-                KeyCode::Up => {
-                    move_selection(&mut app.memory_state, -1, app.memory_items.len())
-                }
-                KeyCode::Down => {
-                    move_selection(&mut app.memory_state, 1, app.memory_items.len())
-                }
+                KeyCode::Up => move_selection(&mut app.memory_state, -1, app.memory_items.len()),
+                KeyCode::Down => move_selection(&mut app.memory_state, 1, app.memory_items.len()),
                 KeyCode::PageUp => {
                     move_selection(&mut app.memory_state, -5, app.memory_items.len())
                 }
@@ -241,7 +664,10 @@ pub fn handle_key(
                 KeyCode::Char('m') if ctrl => {
                     // Toggle memory
                     app.memory_enabled = !app.memory_enabled;
-                    app.status = format!("Toggling memory {}...", if app.memory_enabled { "ON" } else { "OFF" });
+                    app.status = format!(
+                        "Toggling memory {}...",
+                        if app.memory_enabled { "ON" } else { "OFF" }
+                    );
                     app.bg_tasks = app.bg_tasks.saturating_add(1);
                     spawn_memory_toggle(api.clone(), tx.clone(), app.memory_enabled);
                 }
@@ -428,6 +854,64 @@ pub fn handle_key(
             return Ok(());
         }
         Mode::Chat => {}
+        Mode::FileBrowser => {
+            // Handle file browser navigation
+            match key.code {
+                KeyCode::Esc => {
+                    app.mode = Mode::Chat;
+                    app.file_browser_files = Vec::new();
+                }
+                KeyCode::Down => {
+                    if let Some(mut state) = app.file_browser_state.selected() {
+                        state = (state + 1).min(app.file_browser_files.len().saturating_sub(1));
+                        app.file_browser_state.select(Some(state));
+                    }
+                }
+                KeyCode::Up => {
+                    if let Some(mut state) = app.file_browser_state.selected() {
+                        state = state.saturating_sub(1);
+                        app.file_browser_state.select(Some(state));
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(selected_idx) = app.file_browser_state.selected() {
+                        if let Some(selected_file) =
+                            app.file_browser_files.get(selected_idx).cloned()
+                        {
+                            if selected_file.is_dir {
+                                // Enter directory - load its contents
+                                app.file_browser_path = selected_file.path.clone();
+                                app.bg_tasks += 1;
+                                let workspace_id =
+                                    app.selected_workspace_id.clone().unwrap_or_default();
+                                let path = selected_file.path.clone();
+                                spawn_file_list_fetch(api.clone(), tx.clone(), workspace_id, path);
+                            } else {
+                                // Open file
+                                app.mode = Mode::Chat;
+                                app.input.clear();
+                                app.cursor = 0;
+                                app.file_browser_files = Vec::new();
+                                let file_name = selected_file.name.clone();
+                                // TODO: Load file contents into input for editing
+                                app.status = format!("Opened file: {}", file_name);
+                            }
+                        }
+                    }
+                }
+                KeyCode::BackTab | KeyCode::Left => {
+                    // Go up one directory
+                    if let Some(parent_path) = parent_directory(&app.file_browser_path) {
+                        app.file_browser_path = parent_path;
+                        app.bg_tasks += 1;
+                        let workspace_id = app.selected_workspace_id.clone().unwrap_or_default();
+                        let path = app.file_browser_path.clone();
+                        spawn_file_list_fetch(api.clone(), tx.clone(), workspace_id, path);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     // Mode::Chat key handling
@@ -436,6 +920,45 @@ pub fn handle_key(
         KeyCode::Char('c') if ctrl => app.should_quit = true,
         KeyCode::F(1) => app.mode = Mode::Help,
         KeyCode::F(2) => app.mode = Mode::ModelPicker,
+        // Completion shortcuts
+        KeyCode::Tab if !app.input.is_empty() => {
+            // Accept completion
+            if app.show_completions && app.selected_completion.is_some() {
+                if let Some(idx) = app.selected_completion {
+                    if let Some(completion) = app.completions.get(idx) {
+                        // Insert completion at cursor
+                        app.input.extend(completion.text.chars());
+                        app.cursor += completion.text.len();
+                        app.show_completions = false;
+                        app.completions.clear();
+                    }
+                }
+            }
+        }
+        KeyCode::Esc if app.show_completions => {
+            // Cancel completion
+            app.show_completions = false;
+            app.completions.clear();
+            app.selected_completion = None;
+        }
+        KeyCode::Down if app.show_completions => {
+            // Cycle completions down
+            if let Some(current) = app.selected_completion {
+                let next = (current + 1) % app.completions.len();
+                app.selected_completion = Some(next);
+            }
+        }
+        KeyCode::Up if app.show_completions => {
+            // Cycle completions up
+            if let Some(current) = app.selected_completion {
+                let next = if current == 0 {
+                    app.completions.len() - 1
+                } else {
+                    current - 1
+                };
+                app.selected_completion = Some(next);
+            }
+        }
         KeyCode::F(3) => {
             if !app.token_present {
                 app.messages.push(ChatMsg {
@@ -458,7 +981,8 @@ pub fn handle_key(
             if !app.token_present {
                 app.messages.push(ChatMsg {
                     role: ChatRole::System,
-                    content: "Missing token. Run `starbott auth login` to access threads.".to_string(),
+                    content: "Missing token. Run `starbott auth login` to access threads."
+                        .to_string(),
                     sendable: false,
                 });
                 app.status = "Missing token.".to_string();
@@ -471,11 +995,20 @@ pub fn handle_key(
             }
             app.mode = Mode::ThreadPicker;
         }
+        KeyCode::F(6) => {
+            app.mode = Mode::FileBrowser;
+            app.file_browser_path = app.working_dir.clone(); // Start from launch directory
+            app.bg_tasks += 1;
+            let workspace_id = app.selected_workspace_id.clone().unwrap_or_default();
+            let path = app.file_browser_path.to_string();
+            spawn_file_list_fetch(api.clone(), tx.clone(), workspace_id, path);
+        }
         KeyCode::F(5) => {
             if !app.token_present {
                 app.messages.push(ChatMsg {
                     role: ChatRole::System,
-                    content: "Missing token. Run `starbott auth login` to access memory.".to_string(),
+                    content: "Missing token. Run `starbott auth login` to access memory."
+                        .to_string(),
                     sendable: false,
                 });
                 app.status = "Missing token.".to_string();
@@ -547,6 +1080,7 @@ pub fn handle_key(
                 messages,
                 workspace_id,
                 active_thread_id,
+                app.working_dir.clone(),
             );
         }
         KeyCode::Backspace => {
@@ -572,6 +1106,15 @@ pub fn handle_key(
             }
             app.input.insert(app.cursor, ch);
             app.cursor += 1;
+
+            // Trigger completion after typing
+            if !app.completion_active && app.input.len() > 2 {
+                // Debounce completion requests
+                if app.cute == CuteMode::Off || app.rng % 10 == 0 {
+                    // 10% chance in cute mode
+                    trigger_completion(api, tx, app);
+                }
+            }
         }
         _ => {}
     }
@@ -695,10 +1238,16 @@ fn retry_last_chat(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mu
         messages,
         workspace_id,
         active_thread_id,
+        app.working_dir.clone(),
     );
 }
 
-fn send_chat_text(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mut App, text: String) {
+fn send_chat_text(
+    api: &ApiClient,
+    tx: &mpsc::UnboundedSender<TuiMsg>,
+    app: &mut App,
+    text: String,
+) {
     if app.waiting {
         return;
     }
@@ -739,5 +1288,55 @@ fn send_chat_text(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mut
         messages,
         workspace_id,
         active_thread_id,
+        app.working_dir.clone(),
     );
+}
+
+// ============================================================================
+// Completion helper functions
+// ============================================================================
+
+fn trigger_completion(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: &mut App) {
+    // Create a mock file path and content for completion
+    let file_path = "/current_file.js".to_string(); // In real implementation, this would track current file
+    let content = app.input.iter().collect::<String>();
+
+    // Get current cursor position (end of input for now)
+    let cursor_pos = (app.input.len(), app.input.len());
+
+    app.completion_active = true;
+    spawn_completion_request(api.clone(), tx.clone(), file_path, content, cursor_pos);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_local_list_request, is_local_pwd_request, parse_local_list_target};
+
+    #[test]
+    fn list_request_matches_contents_prompt() {
+        assert!(is_local_list_request("can you tell me what the contents are?"));
+        assert!(is_local_list_request("can you tell me what the contents are though?"));
+    }
+
+    #[test]
+    fn list_request_matches_followup_working_directory_fragment() {
+        assert!(is_local_list_request("of our working directory?"));
+    }
+
+    #[test]
+    fn pwd_does_not_override_list_prompt() {
+        assert!(!is_local_pwd_request("can you tell me what the contents are?"));
+    }
+
+    #[test]
+    fn parse_target_from_natural_language() {
+        assert_eq!(
+            parse_local_list_target("what's in the deploy folder?"),
+            Some("deploy".to_string())
+        );
+        assert_eq!(
+            parse_local_list_target("look inside `src` directory"),
+            Some("src".to_string())
+        );
+    }
 }

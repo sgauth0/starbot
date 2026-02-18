@@ -21,7 +21,14 @@ Group=starbot
 WorkingDirectory=/var/www/sites/stella/starbot.cloud/Starbot_WebGUI
 Environment="NODE_ENV=production"
 Environment="PORT=3001"
-Environment="NEXT_PUBLIC_API_URL=https://starbot.cloud/v1"
+Environment="NEXT_PUBLIC_API_URL=/v1"
+Environment="NEXT_PUBLIC_ADMIN_CONSOLE_HOSTS=console.sgauth0.com,www.console.sgauth0.com,console.starbot.cloud,www.console.starbot.cloud"
+Environment="NEXT_PUBLIC_ADMIN_CONSOLE_URL=https://console.starbot.cloud"
+Environment="NEXT_PUBLIC_CHAT_APP_URL=https://starbot.cloud"
+Environment="ADMIN_CONSOLE_HOSTS=console.sgauth0.com,www.console.sgauth0.com,console.starbot.cloud,www.console.starbot.cloud"
+Environment="ADMIN_EMAILS=stella@starbot.cloud"
+Environment="ADMIN_CONSOLE_CODE=change-this-admin-code"
+Environment="ADMIN_COOKIE_SECRET=change-this-cookie-secret"
 
 # Start command (Next.js production server)
 ExecStart=/usr/bin/node /var/www/sites/stella/starbot.cloud/Starbot_WebGUI/.next/standalone/server.js

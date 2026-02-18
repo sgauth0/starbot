@@ -694,6 +694,71 @@ pub fn handle_tui_msg(api: &ApiClient, tx: &mpsc::UnboundedSender<TuiMsg>, app: 
                 }
             }
         }
+        TuiMsg::CompletionRequest(file_path, res) => {
+            app.bg_tasks = app.bg_tasks.saturating_sub(1);
+            app.completion_active = false;
+
+            match res {
+                Ok(resp) => {
+                    if let Some(suggestions) = resp.json.get("suggestions").and_then(|v| v.as_array()) {
+                        app.completions = suggestions
+                            .iter()
+                            .filter_map(|item| {
+                                Some(crate::tui::types::Completion {
+                                    text: item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                    confidence: item.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5),
+                                    language: item.get("language").and_then(|v| v.as_str()).unwrap_or("text").to_string(),
+                                })
+                            })
+                            .collect();
+
+                        if !app.completions.is_empty() {
+                            app.show_completions = true;
+                            app.selected_completion = Some(0);
+                            app.status = format!("{} completions", app.completions.len());
+                        } else {
+                            app.show_completions = false;
+                            app.status = "No completions available".to_string();
+                        }
+                    } else {
+                        app.show_completions = false;
+                        app.status = "Failed to parse completion response".to_string();
+                    }
+                }
+                Err(err) => {
+                    app.show_completions = false;
+                    app.completions.clear();
+                    app.status = format!("Completion failed: {err}");
+                }
+            }
+        }
+        TuiMsg::FileListRequest(workspace_id, path, res) => {
+            app.bg_tasks = app.bg_tasks.saturating_sub(1);
+
+            match res {
+                Ok(resp) => {
+                    if let Some(files) = resp.json.get("files").and_then(|v| v.as_array()) {
+                        app.file_browser_files = files
+                            .iter()
+                            .filter_map(|item| {
+                                Some(crate::tui::types::FileNode {
+                                    name: item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                    path: item.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                    is_dir: item.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false),
+                                    size: item.get("size").and_then(|v| v.as_u64()),
+                                    last_modified: item.get("last_modified").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                })
+                            })
+                            .collect();
+                        app.status = format!("Loaded {} files", app.file_browser_files.len());
+                    }
+                }
+                Err(err) => {
+                    app.status = format!("Failed to load files: {}", err);
+                    app.file_browser_files = Vec::new();
+                }
+            }
+        }
         TuiMsg::StreamStatus(status) => {
             // Show routing/thinking status in UI
             app.status = format!("⚡ {status}");

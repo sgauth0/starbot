@@ -191,6 +191,57 @@ const MODELS: ModelDefinition[] = [
     notes: 'Best for reasoning and agentic tasks (no custom temp)',
   },
 
+  // Azure Claude Haiku 4.5
+  {
+    id: 'claude-haiku-4.5',
+    provider: 'azure',
+    deploymentName: 'claude-haiku-4-5',
+    displayName: 'Claude Haiku 4.5',
+    tier: 1,
+    capabilities: ['text', 'streaming', 'tools'],
+    contextWindow: 200000,
+    maxOutputTokens: 8192,
+    costPer1kInput: 0.001,
+    costPer1kOutput: 0.005,
+    latencyMs: 650,
+    status: 'enabled',
+    notes: 'Fast Claude model via Azure Anthropic',
+  },
+
+  // Azure Claude Sonnet 4.5
+  {
+    id: 'claude-sonnet-4.5',
+    provider: 'azure',
+    deploymentName: 'claude-sonnet-4-5',
+    displayName: 'Claude Sonnet 4.5',
+    tier: 3,
+    capabilities: ['text', 'streaming', 'tools'],
+    contextWindow: 200000,
+    maxOutputTokens: 8192,
+    costPer1kInput: 0.003,
+    costPer1kOutput: 0.015,
+    latencyMs: 900,
+    status: 'enabled',
+    notes: 'Strong general reasoning via Azure Anthropic',
+  },
+
+  // Azure Claude Sonnet 4.5 (second deployment)
+  {
+    id: 'claude-sonnet-4.5-2',
+    provider: 'azure',
+    deploymentName: 'claude-sonnet-4-5-2',
+    displayName: 'Claude Sonnet 4.5 (x2)',
+    tier: 3,
+    capabilities: ['text', 'streaming', 'tools'],
+    contextWindow: 200000,
+    maxOutputTokens: 8192,
+    costPer1kInput: 0.003,
+    costPer1kOutput: 0.015,
+    latencyMs: 900,
+    status: 'enabled',
+    notes: 'Second Sonnet 4.5 deployment for additional capacity',
+  },
+
   // ===== TIER 3: Premium (for most complex tasks) =====
 
   // Gemini 3.0 Flash Preview (FIRST CHOICE for tier 3)

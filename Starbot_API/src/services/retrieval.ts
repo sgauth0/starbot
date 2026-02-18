@@ -42,50 +42,35 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (normA * normB);
 }
 
-/**
- * Search for relevant memory chunks using semantic similarity
- *
- * @param query - The search query text
- * @param projectId - Project ID to scope search
- * @param workspaceId - Optional workspace ID to scope search
- * @param topK - Number of top results to return
- * @param minSimilarity - Minimum similarity threshold (0-1)
- */
-export async function searchMemory(
+function formatScope(scope: string): string {
+  if (scope === 'project') return 'Project';
+  if (scope === 'workspace') return 'Workspace';
+  if (scope === 'chat') return 'Chat';
+  if (scope === 'identity') return 'Identity';
+  return scope;
+}
+
+async function searchMemoryDocs(
+  docs: Array<{
+    id: string;
+    scope: string;
+    content: string;
+    chunks: Array<{ id: string; text: string; embeddingVector: string | null }>;
+  }>,
   query: string,
-  projectId: string,
-  workspaceId?: string,
-  topK = 5,
-  minSimilarity = 0.5
+  topK: number,
+  minSimilarity: number
 ): Promise<RetrievalResult[]> {
-  // Generate query embedding
   const queryEmbedding = await generateEmbedding(query);
   if (!queryEmbedding) {
-    console.warn('Could not generate query embedding');
     return [];
   }
 
-  // Get all memory documents for this project/workspace
-  const memoryDocs = await prisma.memoryDocument.findMany({
-    where: {
-      OR: [
-        { projectId, scope: 'project' },
-        ...(workspaceId ? [{ workspaceId, scope: 'workspace' }] : []),
-      ],
-    },
-    include: {
-      chunks: true,
-    },
-  });
-
-  // Calculate similarities for all chunks with embeddings
   const results: RetrievalResult[] = [];
 
-  for (const doc of memoryDocs) {
+  for (const doc of docs) {
     for (const chunk of doc.chunks) {
-      if (!chunk.embeddingVector) {
-        continue; // Skip chunks without embeddings
-      }
+      if (!chunk.embeddingVector) continue;
 
       try {
         const chunkEmbedding = JSON.parse(chunk.embeddingVector);
@@ -106,14 +91,97 @@ export async function searchMemory(
     }
   }
 
-  // Sort by similarity (highest first) and take top K
   results.sort((a, b) => b.similarity - a.similarity);
   return results.slice(0, topK);
 }
 
 /**
+ * Search for relevant memory chunks using semantic similarity
+ *
+ * @param query - The search query text
+ * @param projectId - Project ID to scope search
+ * @param workspaceId - Optional workspace ID to scope search
+ * @param topK - Number of top results to return
+ * @param minSimilarity - Minimum similarity threshold (0-1)
+ */
+export async function searchMemory(
+  query: string,
+  projectId: string,
+  workspaceId?: string,
+  topK = 5,
+  minSimilarity = 0.5
+): Promise<RetrievalResult[]> {
+  const memoryDocs = await prisma.memoryDocument.findMany({
+    where: {
+      OR: [
+        {
+          scope: 'project',
+          projectId,
+          workspaceId: null,
+          chatId: null,
+        },
+        ...(workspaceId ? [{
+          scope: 'workspace',
+          projectId: null,
+          workspaceId,
+          chatId: null,
+        }] : []),
+      ],
+    },
+    include: {
+      chunks: true,
+    },
+  });
+
+  return searchMemoryDocs(memoryDocs, query, topK, minSimilarity);
+}
+
+export async function searchIdentityMemory(
+  query: string,
+  topK = 3,
+  minSimilarity = 0.35
+): Promise<RetrievalResult[]> {
+  const identityDocs = await prisma.memoryDocument.findMany({
+    where: {
+      scope: 'identity',
+      projectId: null,
+      workspaceId: null,
+      chatId: null,
+    },
+    include: {
+      chunks: true,
+    },
+    take: 1,
+  });
+
+  return searchMemoryDocs(identityDocs, query, topK, minSimilarity);
+}
+
+export async function searchChatMemory(
+  query: string,
+  chatId: string,
+  topK = 5,
+  minSimilarity = 0.5
+): Promise<RetrievalResult[]> {
+  const chatDocs = await prisma.memoryDocument.findMany({
+    where: {
+      scope: 'chat',
+      chatId,
+      projectId: null,
+      workspaceId: null,
+    },
+    include: {
+      chunks: true,
+    },
+    take: 1,
+  });
+
+  return searchMemoryDocs(chatDocs, query, topK, minSimilarity);
+}
+
+/**
  * Get relevant context from memory for a chat
- * Combines project and workspace memory
+ * Combines project and workspace memory (legacy behavior)
  */
 export async function getRelevantContext(
   query: string,
@@ -127,11 +195,68 @@ export async function getRelevantContext(
     return '';
   }
 
-  // Format results into context
   let context = '# Relevant Memory\n\n';
 
   for (const result of results) {
-    context += `## From ${result.scope === 'project' ? 'Project' : 'Workspace'} Memory (${(result.similarity * 100).toFixed(1)}% match)\n\n`;
+    context += `## From ${formatScope(result.scope)} Memory (${(result.similarity * 100).toFixed(1)}% match)\n\n`;
+    context += `${result.text}\n\n`;
+  }
+
+  return context;
+}
+
+export async function getIdentityContext(query: string, maxChunks = 3): Promise<string> {
+  const identityDoc = await prisma.memoryDocument.findFirst({
+    where: {
+      scope: 'identity',
+      projectId: null,
+      workspaceId: null,
+      chatId: null,
+    },
+  });
+
+  if (!identityDoc) {
+    return '';
+  }
+
+  const results = await searchIdentityMemory(query, maxChunks);
+  if (results.length === 0) {
+    return identityDoc.content;
+  }
+
+  let context = '# IDENTITY.md\n\n';
+  for (const result of results) {
+    context += `${result.text}\n\n`;
+  }
+
+  return context;
+}
+
+export async function getChatMemoryContext(
+  query: string,
+  chatId: string,
+  maxChunks = 5
+): Promise<string> {
+  const chatMemory = await prisma.memoryDocument.findFirst({
+    where: {
+      scope: 'chat',
+      chatId,
+      projectId: null,
+      workspaceId: null,
+    },
+  });
+
+  if (!chatMemory) {
+    return '';
+  }
+
+  const results = await searchChatMemory(query, chatId, maxChunks);
+  if (results.length === 0) {
+    return chatMemory.content;
+  }
+
+  let context = '# MEMORY.md\n\n';
+  for (const result of results) {
     context += `${result.text}\n\n`;
   }
 

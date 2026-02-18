@@ -2,6 +2,7 @@ export interface AuthSession {
   email: string;
   name: string;
   loggedInAt: string;
+  role?: 'admin' | 'user' | 'guest';
 }
 
 export const AUTH_SESSION_KEY = 'starbot_session';
@@ -35,4 +36,38 @@ export function clearAuthSession() {
   if (!isBrowser()) return;
   localStorage.removeItem(AUTH_SESSION_KEY);
   window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
+}
+
+export async function syncServerSession(input: {
+  email: string;
+  name: string;
+  adminCode?: string;
+}): Promise<'admin' | 'user'> {
+  if (!isBrowser()) return 'user';
+
+  try {
+    const response = await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (!response.ok) return 'user';
+    const data = (await response.json()) as { role?: 'admin' | 'user' };
+    return data.role === 'admin' ? 'admin' : 'user';
+  } catch {
+    return 'user';
+  }
+}
+
+export async function clearServerSession() {
+  if (!isBrowser()) return;
+
+  try {
+    await fetch('/api/auth/session', {
+      method: 'DELETE',
+    });
+  } catch {
+    // no-op
+  }
 }

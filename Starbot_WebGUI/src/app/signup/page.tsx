@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Lock, Mail, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { writeAuthSession } from '@/lib/auth-session';
+import { syncServerSession, writeAuthSession } from '@/lib/auth-session';
 import { toast } from 'sonner';
 
 export default function SignupPage() {
@@ -24,14 +24,20 @@ export default function SignupPage() {
     );
   }, [name, email, password, confirmPassword]);
 
-  const handleSignup = (e: FormEvent<HTMLFormElement>) => {
+  const handleSignup = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canSubmit) return;
+
+    const role = await syncServerSession({
+      name: name.trim(),
+      email: email.trim(),
+    });
 
     writeAuthSession({
       name: name.trim(),
       email: email.trim(),
       loggedInAt: new Date().toISOString(),
+      role,
     });
 
     toast.success('Account created');

@@ -42,11 +42,29 @@ if id -u "$API_RUNTIME_USER" >/dev/null 2>&1; then
     echo -e "${YELLOW}Preparing API directory ownership for $API_RUNTIME_USER...${NC}"
     sudo chown -R "$API_RUNTIME_USER:$API_RUNTIME_GROUP" "$API_DIR"
     echo -e "${YELLOW}Building API as $API_RUNTIME_USER...${NC}"
-    sudo -u "$API_RUNTIME_USER" bash -lc "cd '$API_DIR' && npm ci && npm run build"
+    sudo -u "$API_RUNTIME_USER" bash -lc "
+      cd '$API_DIR'
+      if [ -f .env ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ./.env
+        set +a
+      fi
+      DATABASE_URL=\"\${DATABASE_URL:-file:../starbot.db}\"
+      DATABASE_URL=\"\$DATABASE_URL\" npm ci
+      DATABASE_URL=\"\$DATABASE_URL\" npm run build
+    "
 else
     cd "$API_DIR"
-    npm ci
-    npm run build
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ./.env
+        set +a
+    fi
+    DATABASE_URL="${DATABASE_URL:-file:../starbot.db}"
+    DATABASE_URL="$DATABASE_URL" npm ci
+    DATABASE_URL="$DATABASE_URL" npm run build
 fi
 
 if [ ! -f "$API_DIR/dist/index.js" ]; then
@@ -311,6 +329,13 @@ if [ "$USE_DOCKER_WEB" -eq 1 ]; then
     else
         echo -e "${RED}❌ WebGUI not responding via Docker Caddy${NC}"
     fi
+
+    echo -e "${YELLOW}Testing Admin Console host...${NC}"
+    if curl -sf -H 'Host: console.starbot.cloud' http://127.0.0.1 > /dev/null; then
+        echo -e "${GREEN}✅ console.starbot.cloud responding via Docker Caddy${NC}"
+    else
+        echo -e "${RED}❌ console.starbot.cloud not responding via Docker Caddy${NC}"
+    fi
 else
     if curl -sf http://localhost:3001 > /dev/null; then
         echo -e "${GREEN}✅ WebGUI responding${NC}"
@@ -333,13 +358,15 @@ echo -e "\n${YELLOW}🔗 URLs:${NC}"
 echo -e "  API:    http://localhost:3737/v1/health"
 if [ "$USE_DOCKER_WEB" -eq 1 ]; then
     echo -e "  WebGUI: https://starbot.cloud (via Docker Caddy)"
+    echo -e "  Admin:  https://console.starbot.cloud (via Docker Caddy)"
 else
     echo -e "  WebGUI: http://localhost:3001"
     echo -e "  Public: http://starbot.cloud (via nginx)"
+    echo -e "  Admin:  http://console.starbot.cloud (via nginx)"
 fi
 
 echo -e "\n${YELLOW}📝 Next Steps:${NC}"
-echo -e "  1. Set up SSL: ${GREEN}sudo certbot --nginx -d starbot.cloud -d www.starbot.cloud${NC}"
+echo -e "  1. Set up SSL: ${GREEN}sudo certbot --nginx -d starbot.cloud -d www.starbot.cloud -d console.starbot.cloud -d www.console.starbot.cloud${NC}"
 echo -e "  2. View API logs: ${GREEN}sudo journalctl -u starbot-api -f${NC}"
 if [ "$USE_DOCKER_WEB" -eq 1 ]; then
     echo -e "  3. View WebGUI logs: ${GREEN}sudo docker logs -f $WEBGUI_DOCKER_CONTAINER${NC}"

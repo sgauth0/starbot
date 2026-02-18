@@ -136,6 +136,11 @@ pub async fn handle(runtime: &Runtime, args: TuiArgs) -> Result<(), CliError> {
         model_state: ListState::default(),
         selected_provider: initial_provider,
         selected_model: initial_model,
+        // Inline completion state
+        completions: Vec::new(),
+        selected_completion: None,
+        show_completions: false,
+        completion_active: false,
         workspace_options: Vec::new(),
         workspace_state: ListState::default(),
         selected_workspace_id,
@@ -156,6 +161,11 @@ pub async fn handle(runtime: &Runtime, args: TuiArgs) -> Result<(), CliError> {
         show_debug: false,
         pending_tool: None,
         tool_approval_history: Vec::new(),
+        // File browser state
+        file_browser_path: "/".to_string(),
+        file_browser_files: Vec::new(),
+        file_browser_state: ListState::default(),
+        file_browser_selected: None,
     };
 
     app.model_state.select(Some(0));
@@ -216,6 +226,11 @@ pub async fn handle(runtime: &Runtime, args: TuiArgs) -> Result<(), CliError> {
 fn default_model_options() -> Vec<ModelOption> {
     vec![
         ModelOption {
+            provider: "azure".to_string(),
+            model: Some("claude-haiku-4-5".to_string()),
+            label: "Claude Haiku 4.5".to_string(),
+        },
+        ModelOption {
             provider: "auto".to_string(),
             model: None,
             label: "Auto".to_string(),
@@ -235,11 +250,11 @@ fn default_model_options() -> Vec<ModelOption> {
 
 fn parse_model_selector(selector: Option<&str>) -> (String, Option<String>) {
     let Some(raw) = selector else {
-        return ("auto".to_string(), None);
+        return ("azure".to_string(), Some("claude-haiku-4-5".to_string()));
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return ("auto".to_string(), None);
+        return ("azure".to_string(), Some("claude-haiku-4-5".to_string()));
     }
 
     if let Some((provider, model)) = trimmed.split_once(':') {
@@ -724,6 +739,11 @@ fn ui(f: &mut Frame<'_>, app: &mut App) {
             let popup = render_tool_card(app);
             f.render_widget(popup, area);
         }
+        Mode::FileBrowser => {
+            let area = centered_rect(80, 70, size);
+            f.render_widget(Clear, area);
+            render_file_browser_popup(f, app, area);
+        }
         Mode::Chat => {}
     }
 }
@@ -1079,26 +1099,73 @@ fn render_input(app: &App) -> Paragraph<'static> {
     let input = app.input.iter().collect::<String>();
 
     let text = if app.cute == CuteMode::Off {
-        Text::from(input)
+        // Show input with ghost text if available
+        if app.show_completions && !app.completions.is_empty() {
+            if let Some(selected_idx) = app.selected_completion {
+                if let Some(selected_completion) = app.completions.get(selected_idx) {
+                    let input_text = input.chars().collect::<String>();
+                    let ghost_text = format!("{}{}", input_text, selected_completion.text);
+                    Text::from(ghost_text)
+                } else {
+                    Text::from(input)
+                }
+            } else {
+                Text::from(input)
+            }
+        } else {
+            Text::from(input)
+        }
     } else {
         let prefix = input_prompt_prefix(app.cute);
-        Text::from(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)),
-            Span::raw(input),
-        ]))
+        let main_text = if app.show_completions && !app.completions.is_empty() {
+            if let Some(selected_idx) = app.selected_completion {
+                if let Some(selected_completion) = app.completions.get(selected_idx) {
+                    let input_text = input.chars().collect::<String>();
+                    let ghost_text = format!("{}{}", input_text, selected_completion.text);
+                    Text::from(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)),
+                        Span::raw(ghost_text),
+                    ]))
+                } else {
+                    Text::from(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)),
+                        Span::raw(input),
+                    ]))
+                }
+            } else {
+                Text::from(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)),
+                    Span::raw(input),
+                ]))
+            }
+        } else {
+            Text::from(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)),
+                Span::raw(input),
+            ]))
+        };
+        main_text
     };
 
+    // Show completion hint
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+
+    if app.show_completions && !app.completions.is_empty() {
+        let hint_style = if app.cute != CuteMode::Off {
+            Style::default().fg(c_sparkle())
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        block = block.border_style(hint_style);
+    } else if app.cute != CuteMode::Off {
+        let c = if app.waiting { c_heart() } else { c_muted() };
+        block = block.border_style(Style::default().fg(c));
+    }
+
     Paragraph::new(text)
-        .block({
-            let mut block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded);
-            if app.cute != CuteMode::Off {
-                let c = if app.waiting { c_heart() } else { c_muted() };
-                block = block.border_style(Style::default().fg(c));
-            }
-            block
-        })
+        .block(block)
         .wrap(Wrap { trim: false })
 }
 
@@ -2766,4 +2833,81 @@ pub fn format_tool_propose_result(tool_name: &str, payload: &Value) -> String {
         out.push("…(truncated)".to_string());
     }
     out.join("\n")
+}
+
+
+fn render_file_browser_popup(f: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(format!("File Browser: {}", app.file_browser_path));
+
+    if app.cute != CuteMode::Off {
+        block = block.border_style(Style::default().fg(c_sparkle()));
+    }
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // List files
+    let items: Vec<ListItem> = app.file_browser_files
+        .iter()
+        .enumerate()
+        .map(|(i, file)| {
+            let mut line = if file.is_dir {
+                format!("📁 {}", file.name)
+            } else {
+                format!("📄 {}", file.name)
+            };
+
+            // Show size for files
+            if !file.is_dir && file.size.is_some() {
+                let size = file.size.unwrap();
+                let size_str = if size < 1024 {
+                    format!(" ({})", size)
+                } else if size < 1024 * 1024 {
+                    format!(" ({:.1}K)", size as f64 / 1024.0)
+                } else {
+                    format!(" ({:.1}M)", size as f64 / (1024.0 * 1024.0))
+                };
+                line.push_str(&size_str);
+            }
+
+            // Show date if available
+            if file.last_modified.is_some() {
+                line.push_str(&format!("  {}", file.last_modified.as_ref().unwrap()));
+            }
+
+            let style = if Some(file.path.clone()) == app.file_browser_selected {
+                Style::default().fg(c_heart()).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(line, style)
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol("➤ ");
+
+    f.render_stateful_widget(list, inner, &mut app.file_browser_state);
+
+    // Instructions
+    let help_text = "↑/↓: Navigate | Enter: Open | Backspace: Back | Space: Select | Esc: Close";
+    let help = Paragraph::new(Line::from(vec![
+        Span::styled(help_text, Style::default().fg(Color::Gray))
+    ]))
+    .alignment(Alignment::Center);
+
+    let help_area = Rect {
+        x: area.x,
+        y: area.bottom() - 1,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(help, help_area);
 }

@@ -1,42 +1,103 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { ArrowLeft, Lock, Mail } from 'lucide-react';
+import { FormEvent, useMemo, useState, useSyncExternalStore } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft, KeyRound, Lock, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { writeAuthSession } from '@/lib/auth-session';
+import { syncServerSession, writeAuthSession } from '@/lib/auth-session';
 import { toast } from 'sonner';
+
+function subscribeLocation() {
+  return () => {};
+}
+
+function getConsoleHosts(): Set<string> {
+  const configured = String(process.env.NEXT_PUBLIC_ADMIN_CONSOLE_HOSTS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (configured.length > 0) {
+    return new Set(configured);
+  }
+
+  return new Set([
+    'console.sgauth0.com',
+    'www.console.sgauth0.com',
+    'console.starbot.cloud',
+    'www.console.starbot.cloud',
+  ]);
+}
+
+function readIsConsoleHost() {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname.toLowerCase();
+  return getConsoleHosts().has(host);
+}
+
+function normalizeNextPath(value: string | null, fallback: string): string {
+  if (!value) return fallback;
+  if (!value.startsWith('/')) return fallback;
+  if (value.startsWith('//')) return fallback;
+  return value;
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [adminCode, setAdminCode] = useState('');
+  const isConsoleHost = useSyncExternalStore(subscribeLocation, readIsConsoleHost, () => false);
 
   const canSubmit = useMemo(() => {
     return email.trim().length > 3 && password.trim().length > 0;
   }, [email, password]);
 
-  const handleLogin = (e: FormEvent<HTMLFormElement>) => {
+  const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canSubmit) return;
 
     const displayName = email.split('@')[0] || 'User';
+    const role = await syncServerSession({
+      name: displayName,
+      email: email.trim(),
+      adminCode: adminCode.trim() || undefined,
+    });
+
+    if (isConsoleHost && role !== 'admin') {
+      toast.error('Admin access denied');
+      return;
+    }
+
     writeAuthSession({
       name: displayName,
       email: email.trim(),
       loggedInAt: new Date().toISOString(),
+      role,
     });
 
     toast.success('Signed in');
-    router.push('/');
+    const nextPath = normalizeNextPath(searchParams.get('next'), isConsoleHost ? '/admin' : '/');
+    if (isConsoleHost) {
+      router.push(nextPath);
+      return;
+    }
+    router.push(nextPath);
   };
 
   const handleGuest = () => {
+    if (isConsoleHost) {
+      toast.error('Guest access is disabled for admin console');
+      return;
+    }
+
     writeAuthSession({
       name: 'Guest',
       email: 'guest@local',
       loggedInAt: new Date().toISOString(),
+      role: 'guest',
     });
     toast.success('Continuing as guest');
     router.push('/');
@@ -70,7 +131,11 @@ export default function LoginPage() {
             </button>
 
             <h2 className="text-2xl font-semibold text-slate-900">Sign in</h2>
-            <p className="mt-1 text-sm text-slate-600">Use your account credentials to continue.</p>
+            <p className="mt-1 text-sm text-slate-600">
+              {isConsoleHost
+                ? 'Admin access only. Sign in with your allowlisted email and admin code.'
+                : 'Use your account credentials to continue.'}
+            </p>
 
             <form className="mt-6 space-y-4" onSubmit={handleLogin}>
               <label className="block space-y-1">
@@ -103,6 +168,20 @@ export default function LoginPage() {
                 </div>
               </label>
 
+              <label className="block space-y-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Admin access code (optional)</span>
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="password"
+                    value={adminCode}
+                    onChange={(e) => setAdminCode(e.target.value)}
+                    placeholder="Required for console admin access"
+                    className="h-11 rounded-xl border-slate-300 pl-9 focus-visible:ring-slate-400"
+                  />
+                </div>
+              </label>
+
               <div className="space-y-2 pt-2">
                 <Button
                   type="submit"
@@ -111,26 +190,30 @@ export default function LoginPage() {
                 >
                   Sign in
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleGuest}
-                  className="h-11 w-full rounded-xl border-slate-300 text-slate-700 hover:bg-slate-100"
-                >
-                  Continue as guest
-                </Button>
+                {!isConsoleHost && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleGuest}
+                    className="h-11 w-full rounded-xl border-slate-300 text-slate-700 hover:bg-slate-100"
+                  >
+                    Continue as guest
+                  </Button>
+                )}
               </div>
 
-              <p className="pt-1 text-center text-sm text-slate-600">
-                Need an account?{' '}
-                <button
-                  type="button"
-                  onClick={() => router.push('/signup')}
-                  className="font-medium text-slate-900 underline underline-offset-4 hover:text-slate-700"
-                >
-                  Sign up
-                </button>
-              </p>
+              {!isConsoleHost && (
+                <p className="pt-1 text-center text-sm text-slate-600">
+                  Need an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => router.push('/signup')}
+                    className="font-medium text-slate-900 underline underline-offset-4 hover:text-slate-700"
+                  >
+                    Sign up
+                  </button>
+                </p>
+              )}
             </form>
           </section>
         </div>

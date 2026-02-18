@@ -142,6 +142,15 @@ pub struct TextPromptState {
     pub cursor: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct FileNode {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: Option<u64>,
+    pub last_modified: Option<String>,
+}
+
 // ============================================================================
 // Chat message types
 // ============================================================================
@@ -185,6 +194,7 @@ pub enum Mode {
     TextPromptModal,
     Help,
     ToolCard,
+    FileBrowser,
 }
 
 // ============================================================================
@@ -244,6 +254,12 @@ pub struct App {
     pub cursor: usize,
     pub waiting: bool,
 
+    // Inline completion state
+    pub completions: Vec<Completion>,
+    pub selected_completion: Option<usize>,
+    pub show_completions: bool,
+    pub completion_active: bool,
+
     pub status: String,
     pub last_request_id: Option<String>,
     pub last_elapsed_ms: Option<u128>,
@@ -290,6 +306,31 @@ pub struct App {
     // Tool card state
     pub pending_tool: Option<PendingToolCard>,
     pub tool_approval_history: Vec<ToolApprovalEntry>,
+
+    // File browser state
+    pub file_browser_path: String,
+    pub file_browser_files: Vec<FileNode>,
+    pub file_browser_state: ListState,
+    pub file_browser_selected: Option<String>,
+}
+
+// ============================================================================
+// Inline completion types
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct Completion {
+    pub text: String,
+    pub confidence: f64,
+    pub language: String,
+}
+
+#[derive(Debug)]
+pub struct CompletionRequest {
+    pub file_path: String,
+    pub content: String,
+    pub cursor_pos: (usize, usize), // (line, column)
+    pub suggestions: Vec<Completion>,
 }
 
 // ============================================================================
@@ -314,6 +355,10 @@ pub enum TuiMsg {
     ChatCreated(Result<ApiResponse, CliError>),
     MessageAdded(Result<ApiResponse, CliError>),
     ChatCancelled(Result<ApiResponse, CliError>),
+    // Completion messages
+    CompletionRequest(String, Result<ApiResponse, CliError>),
+    // File browser messages
+    FileListRequest(String, String, Result<ApiResponse, CliError>),
     // Streaming events
     StreamStatus(String),
     StreamToken(String),

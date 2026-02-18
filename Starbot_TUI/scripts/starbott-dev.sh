@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CLI_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-API_URL="${STARBOTT_API_URL:-http://127.0.0.1:3003}"
+API_URL="${STARBOTT_API_URL:-http://127.0.0.1:3737}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {

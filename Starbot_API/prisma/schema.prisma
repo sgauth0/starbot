@@ -52,6 +52,7 @@ model Chat {
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages    Message[]
   events      Event[]
+  memories    MemoryDocument[]
 
   @@index([projectId])
   @@index([workspaceId])
@@ -93,21 +94,25 @@ model Event {
 // MemoryDocument: stores PMEMORY.md (project) or MEMORY.md (workspace)
 model MemoryDocument {
   id          String   @id @default(uuid())
-  scope       String   // "project" | "workspace"
+  scope       String   // "identity" | "chat" | "project" | "workspace"
   projectId   String?
   workspaceId String?
+  chatId      String?
   content     String   // Markdown content
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 
   project     Project?   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chat        Chat?      @relation(fields: [chatId], references: [id], onDelete: Cascade)
   chunks      MemoryChunk[]
 
   @@unique([scope, projectId, workspaceId])
+  @@unique([scope, chatId])
   @@index([scope])
   @@index([projectId])
   @@index([workspaceId])
+  @@index([chatId])
   @@map("memory_documents")
 }
 

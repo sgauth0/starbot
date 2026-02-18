@@ -14,8 +14,11 @@ import {
   listModels,
   type ModelDefinition,
 } from '../services/model-catalog.js';
+import { interpretUserMessage } from '../services/interpreter.js';
 import { getProvider } from '../providers/index.js';
-import { getRelevantContext } from '../services/retrieval.js';
+import { getChatMemoryContext, getIdentityContext, getRelevantContext } from '../services/retrieval.js';
+import { formatWebSearchContext, searchWeb } from '../services/web-search.js';
+import { executeFilesystemRouterPrompt } from '../services/filesystem-router.js';
 import { env } from '../env.js';
 import { enforceRateLimitIfEnabled, requireAuthIfEnabled } from '../security/route-guards.js';
 
@@ -29,6 +32,11 @@ const InferenceRequestSchema = z.object({
   model: z.string().optional(),
   max_tokens: z.number().optional(),
   conversationId: z.string().optional(),
+  client_context: z
+    .object({
+      working_dir: z.string().optional(),
+    })
+    .optional(),
 });
 
 const KNOWN_PROVIDERS = new Set(['kimi', 'vertex', 'azure', 'bedrock', 'cloudflare']);
@@ -192,14 +200,84 @@ export const inferenceRoutes: FastifyPluginAsync = async (server) => {
       orderBy: { createdAt: 'asc' },
     });
 
-    const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+    const lastUserMsg = messages
+      .filter((m: { role: string }) => m.role === 'user')
+      .pop();
     if (!lastUserMsg) {
       return reply.code(400).send({ error: 'No user message found' });
     }
 
+    // Interpreter pass (Cloudflare) before triage/model routing.
+    const interpretation = await interpretUserMessage(lastUserMsg.content);
+    const interpretedUserMessage = interpretation.normalizedUserMessage || lastUserMsg.content;
+    const clarification = interpretation.clarificationQuestion?.trim();
+
+    if (interpretation.shouldClarify && clarification) {
+      await prisma.message.create({
+        data: {
+          chatId: chat.id,
+          role: 'assistant',
+          content: clarification,
+        },
+      });
+
+      return {
+        reply: clarification,
+        conversation_id: chat.id,
+        provider: 'cloudflare',
+        model: env.INTERPRETER_MODEL,
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
+        interpreter: {
+          action: 'clarify',
+          primary_intent: interpretation.primaryIntent,
+          intents: interpretation.intents,
+          confidence: interpretation.confidence,
+          reason: interpretation.reason || null,
+        },
+      };
+    }
+
+    if (interpretation.primaryIntent === 'filesystem') {
+      const fsResponse = await executeFilesystemRouterPrompt(
+        interpretedUserMessage,
+        body.client_context?.working_dir,
+      );
+
+      await prisma.message.create({
+        data: {
+          chatId: chat.id,
+          role: 'assistant',
+          content: fsResponse,
+        },
+      });
+
+      return {
+        reply: fsResponse,
+        conversation_id: chat.id,
+        provider: 'cloudflare',
+        model: env.INTERPRETER_MODEL,
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
+        interpreter: {
+          action: 'execute',
+          primary_intent: interpretation.primaryIntent,
+          intents: interpretation.intents,
+          confidence: interpretation.confidence,
+          reason: interpretation.reason || null,
+        },
+      };
+    }
+
     // Run triage
     const triageResult = runTriage({
-      user_message: lastUserMsg.content,
+      user_message: interpretedUserMessage,
       mode: 'standard',
     });
 
@@ -225,13 +303,33 @@ export const inferenceRoutes: FastifyPluginAsync = async (server) => {
 
     // Get memory context
     let memoryContext = '';
+    let identityContext = '';
+    let chatMemoryContext = '';
+    let webSearchContext = '';
+    if (interpretation.primaryIntent === 'browse') {
+      try {
+        const result = await searchWeb(interpretedUserMessage, 5);
+        if (result && result.hits.length > 0) {
+          webSearchContext = formatWebSearchContext(result);
+        }
+      } catch (err) {
+        // Continue without web search
+      }
+    }
     try {
-      memoryContext = await getRelevantContext(
-        lastUserMsg.content,
-        project.id,
-        undefined,
-        5
-      );
+      if (env.MEMORY_V2_ENABLED) {
+        [identityContext, chatMemoryContext] = await Promise.all([
+          getIdentityContext(interpretedUserMessage, 3),
+          getChatMemoryContext(interpretedUserMessage, chat.id, 5),
+        ]);
+      } else {
+        memoryContext = await getRelevantContext(
+          interpretedUserMessage,
+          project.id,
+          undefined,
+          5
+        );
+      }
     } catch (err) {
       // Continue without memory
     }
@@ -239,14 +337,36 @@ export const inferenceRoutes: FastifyPluginAsync = async (server) => {
     // Build provider messages
     const providerMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
 
+    if (identityContext) {
+      providerMessages.push({ role: 'system', content: identityContext });
+    }
+
+    if (chatMemoryContext) {
+      providerMessages.push({ role: 'system', content: chatMemoryContext });
+    }
+
+    if (webSearchContext) {
+      providerMessages.push({ role: 'system', content: webSearchContext });
+    }
+
     if (memoryContext) {
       providerMessages.push({ role: 'system', content: memoryContext });
     }
 
-    providerMessages.push(...messages.map(m => ({
-      role: m.role as 'user' | 'assistant' | 'system',
-      content: m.content,
-    })));
+    let replaced = false;
+    providerMessages.push(
+      ...messages.map((m: { role: string; content: string }) => {
+        let content = m.content;
+        if (!replaced && m.role === 'user' && content === lastUserMsg.content) {
+          content = interpretedUserMessage;
+          replaced = true;
+        }
+        return {
+          role: m.role as 'user' | 'assistant' | 'system',
+          content,
+        };
+      }),
+    );
 
     // Generate response (non-streaming for CLI)
     let fullResponse = '';
@@ -284,6 +404,13 @@ export const inferenceRoutes: FastifyPluginAsync = async (server) => {
         prompt_tokens: usage.promptTokens,
         completion_tokens: usage.completionTokens,
         total_tokens: usage.totalTokens,
+      },
+      interpreter: {
+        action: 'execute',
+        primary_intent: interpretation.primaryIntent,
+        intents: interpretation.intents,
+        confidence: interpretation.confidence,
+        reason: interpretation.reason || null,
       },
     };
   });
