@@ -397,6 +397,29 @@ export async function generationRoutes(server: FastifyInstance) {
     };
 
     try {
+      // 0. Inject task context if chat has associated tasks
+      let taskContext = '';
+      try {
+        const chatTasks = await prisma.task.findMany({
+          where: { chat_id: chatId },
+          orderBy: [{ priority: 'desc' }, { created_at: 'desc' }],
+          take: 10,
+        });
+
+        if (chatTasks.length > 0) {
+          const taskLines = chatTasks.map(t => {
+            const status = t.status === 'COMPLETED' ? 'DONE' :
+                           t.status === 'IN_PROGRESS' ? 'ACTIVE' :
+                           t.status === 'CANCELLED' ? 'CANCELLED' : 'PENDING';
+            return `  [${status}] P${t.priority} - ${t.title}${t.description ? `: ${t.description}` : ''} (id: ${t.id})`;
+          }).join('\n');
+
+          taskContext = `\n## Current Tasks\nThe following tasks are associated with this conversation:\n${taskLines}\n\nUpdate task status as you make progress. Reference tasks by their IDs.\n`;
+        }
+      } catch (err) {
+        server.log.warn({ err }, 'Task context retrieval failed');
+      }
+
       // 0. Get last user message for interpreter + memory retrieval
       let lastUserIndex = -1;
       for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
@@ -663,6 +686,14 @@ export async function generationRoutes(server: FastifyInstance) {
         providerMessages.push({
           role: 'system',
           content: memoryContext,
+        });
+      }
+
+      // Inject task context if available
+      if (taskContext) {
+        providerMessages.push({
+          role: 'system',
+          content: taskContext,
         });
       }
 

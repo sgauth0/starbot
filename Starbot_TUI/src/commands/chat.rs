@@ -32,6 +32,36 @@ pub async fn handle(runtime: &Runtime, args: ChatArgs) -> Result<(), CliError> {
     let prompt = resolve_prompt(&args)?;
     let api = runtime.api_client()?;
 
+    // Check if user wants to create a task
+    if prompt.to_lowercase().contains("create task") || prompt.to_lowercase().contains("make task") {
+        let task_title = extract_task_title(&prompt);
+        let task_description = extract_task_description(&prompt);
+
+        let task_data = json!({
+            "title": task_title,
+            "description": task_description,
+            "priority": extract_task_priority(&prompt),
+        });
+
+        let res = api.post_json("/v1/tasks", Some(task_data), true).await?;
+
+        if runtime.output.json {
+            runtime.output.print_json(&res.json)?;
+        } else {
+            let task_id = res.json.get("task")
+                .and_then(|t| t.get("id"))
+                .and_then(|i| i.as_str())
+                .unwrap_or("unknown");
+            let title = res.json.get("task")
+                .and_then(|t| t.get("title"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("Untitled");
+            runtime.output.print_human(&format!("✓ Created task: {} (ID: {})", title, task_id));
+        }
+
+        return Ok(());
+    }
+
     if args.stream {
         runtime.output.print_verbose(
             "Requested --stream. Using standard response (CLI streaming output is not implemented yet).",
@@ -83,6 +113,63 @@ pub async fn handle(runtime: &Runtime, args: ChatArgs) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+/// Extract task title from prompt
+fn extract_task_title(prompt: &str) -> String {
+    // Simple extraction - look for quotes or use first reasonable phrase
+    if let Some(start) = prompt.find('"') {
+        if let Some(end) = prompt[start + 1..].find('"') {
+            return prompt[start + 1..start + 1 + end].to_string();
+        }
+    }
+
+    // Fallback: use the first few words after "create task" or "make task"
+    let words: Vec<&str> = prompt.split_whitespace().collect();
+    if let Some(idx) = words.iter().position(|w| w.to_lowercase() == "task") {
+        if idx + 1 < words.len() {
+            return words[idx + 1..].join(" ").trim_matches('.').to_string();
+        }
+    }
+
+    "Untitled Task".to_string()
+}
+
+/// Extract task description from prompt
+fn extract_task_description(prompt: &str) -> Option<String> {
+    // Look for description or details in the prompt
+    if let Some(desc_start) = prompt.to_lowercase().find("description:") {
+        let desc = prompt[desc_start + 12..].trim();
+        if !desc.is_empty() {
+            return Some(desc.to_string());
+        }
+    }
+
+    // Look for anything after the task title
+    let title = extract_task_title(prompt);
+    if let Some(title_pos) = prompt.find(&title) {
+        if title_pos + title.len() < prompt.len() {
+            let desc = prompt[title_pos + title.len()..].trim();
+            if !desc.is_empty() && !desc.to_lowercase().contains("priority:") {
+                return Some(desc.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract task priority from prompt
+fn extract_task_priority(prompt: &str) -> i32 {
+    if prompt.to_lowercase().contains("priority: high") || prompt.to_lowercase().contains("high priority") {
+        8
+    } else if prompt.to_lowercase().contains("priority: low") || prompt.to_lowercase().contains("low priority") {
+        2
+    } else if prompt.to_lowercase().contains("priority: medium") || prompt.to_lowercase().contains("medium priority") {
+        5
+    } else {
+        0
+    }
 }
 
 fn resolve_prompt(args: &ChatArgs) -> Result<String, CliError> {

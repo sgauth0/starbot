@@ -1,0 +1,19 @@
+model Task {
+  id String @id @default(uuid())
+  title String
+  description String?
+  status String @default("pending")
+  priority Int @default(0)
+  parent_id String?
+  chat_id String?
+  metadata String?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  completed_at DateTime?
+
+  @@index([chat_id])
+  @@index([parent_id])
+  @@index([priority])
+  @@index([created_at])
+  @@index([updated_at])
+}

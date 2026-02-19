@@ -205,6 +205,21 @@ impl ApiClient {
         }
     }
 
+    pub async fn put_json(&self, path: &str, body: Option<Value>, auth_required: bool) -> Result<ApiResponse, CliError> {
+        self.request_json(Method::PUT, path, None, body, auth_required, true)
+            .await
+    }
+
+    pub async fn patch_json(&self, path: &str, body: Option<Value>, auth_required: bool) -> Result<ApiResponse, CliError> {
+        self.request_json(Method::PATCH, path, None, body, auth_required, false)
+            .await
+    }
+
+    pub async fn delete_json(&self, path: &str, body: Option<Value>, auth_required: bool) -> Result<ApiResponse, CliError> {
+        self.request_json(Method::DELETE, path, None, body, auth_required, true)
+            .await
+    }
+
     /// Start a streaming POST request (SSE format)
     /// Returns a receiver channel that yields (event_type, data) tuples
     pub async fn post_stream(
@@ -302,6 +317,131 @@ impl ApiClient {
 
         Ok(rx)
     }
+
+    // Task management operations
+    pub async fn list_tasks(&self, status: Option<String>, limit: i32) -> Result<Vec<Task>, CliError> {
+        let mut query = Vec::new();
+        if let Some(s) = status {
+            query.push(("status".to_string(), s));
+        }
+        if limit > 0 {
+            query.push(("limit".to_string(), limit.to_string()));
+        }
+
+        let res = self.get_json("/v1/tasks", Some(&query), true).await?;
+        let tasks = serde_json::from_value::<Vec<Task>>(res.json.get("data").cloned().unwrap_or(json!([])))
+            .map_err(|e| CliError::Generic(format!("Failed to parse tasks: {}", e)))?;
+        Ok(tasks)
+    }
+
+    pub async fn get_task(&self, task_id: &str) -> Result<Task, CliError> {
+        let res = self.get_json(&format!("/v1/tasks/{}", task_id), None, true).await?;
+        let task = serde_json::from_value::<Task>(res.json.get("task").cloned().unwrap_or(json!({})))
+            .map_err(|e| CliError::Generic(format!("Failed to parse task: {}", e)))?;
+        Ok(task)
+    }
+
+    pub async fn create_task(&self, task: CreateTaskRequest) -> Result<Task, CliError> {
+        let body = serde_json::to_value(task).map_err(|e| CliError::Generic(format!("Failed to serialize task: {}", e)))?;
+        let res = self.post_json("/v1/tasks", Some(body), true).await?;
+        let created_task = serde_json::from_value::<Task>(res.json.get("task").cloned().unwrap_or(json!({})))
+            .map_err(|e| CliError::Generic(format!("Failed to parse created task: {}", e)))?;
+        Ok(created_task)
+    }
+
+    pub async fn update_task(&self, task_id: String, task: UpdateTaskRequest) -> Result<Task, CliError> {
+        let body = serde_json::to_value(task).map_err(|e| CliError::Generic(format!("Failed to serialize task: {}", e)))?;
+        let res = self.put_json(&format!("/v1/tasks/{}", task_id), Some(body), true).await?;
+        let updated_task = serde_json::from_value::<Task>(res.json.get("task").cloned().unwrap_or(json!({})))
+            .map_err(|e| CliError::Generic(format!("Failed to parse updated task: {}", e)))?;
+        Ok(updated_task)
+    }
+
+    pub async fn complete_task(&self, task_id: &str) -> Result<Task, CliError> {
+        let res = self.post_json(&format!("/v1/tasks/{}/complete", task_id), None, true).await?;
+        let completed_task = serde_json::from_value::<Task>(res.json.get("task").cloned().unwrap_or(json!({})))
+            .map_err(|e| CliError::Generic(format!("Failed to parse completed task: {}", e)))?;
+        Ok(completed_task)
+    }
+
+    pub async fn delete_task(&self, task_id: &str) -> Result<(), CliError> {
+        self.delete_json(&format!("/v1/tasks/{}", task_id), None, true).await?;
+        Ok(())
+    }
+
+    pub async fn start_task(&self, task_id: &str) -> Result<Task, CliError> {
+        let res = self.post_json(&format!("/v1/tasks/{}/start", task_id), None, true).await?;
+        let started_task = serde_json::from_value::<Task>(res.json.get("task").cloned().unwrap_or(json!({})))
+            .map_err(|e| CliError::Generic(format!("Failed to parse started task: {}", e)))?;
+        Ok(started_task)
+    }
+
+    /// Chat operations
+    pub async fn create_chat(&self, request: CreateChatRequest) -> Result<ChatResponse, CliError> {
+        let body = serde_json::to_value(request).map_err(|e| CliError::Generic(format!("Failed to serialize chat request: {}", e)))?;
+        let res = self.post_json("/v1/inference/chat", Some(body), true).await?;
+
+        let chat_response = serde_json::from_value::<ChatResponse>(res.json)
+            .map_err(|e| CliError::Generic(format!("Failed to parse chat response: {}", e)))?;
+        Ok(chat_response)
+    }
+}
+
+// Additional data structures
+#[derive(Debug, serde::Serialize)]
+pub struct CreateChatRequest {
+    pub project_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub messages: Vec<ChatMessage>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChatResponse {
+    pub messages: Vec<ChatMessage>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+// Task data structures
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub priority: i32,
+    pub due_date: Option<String>,
+    pub estimated_hours: Option<i32>,
+    pub actual_hours: Option<i32>,
+    pub parent_id: Option<String>,
+    pub chat_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CreateTaskRequest {
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: Option<i32>,
+    pub chat_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UpdateTaskRequest {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub priority: Option<i32>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]

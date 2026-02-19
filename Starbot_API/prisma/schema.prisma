@@ -129,3 +129,68 @@ model MemoryChunk {
   @@index([memoryId])
   @@map("memory_chunks")
 }
+
+
+model Task {
+  id           String   @id @default(uuid())
+  title        String
+  description  String?
+  status       String   @default("PENDING")
+  priority     Int      @default(0)
+  due_date     DateTime?
+  estimated_hours Int?
+  actual_hours    Int?
+  parent_id    String?
+  chat_id      String?
+  metadata     String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  completed_at DateTime?
+
+  // Relationships
+  parent       Task?     @relation("TaskSubtasks", fields: [parent_id], references: [id], onDelete: Cascade)
+  subtasks     Task[]    @relation("TaskSubtasks")
+  dependencies TaskDependency[] @relation("TaskDependencies")
+  dependents   TaskDependency[] @relation("TaskDependents")
+  events       TaskEvent[]
+
+  @@index([chat_id])
+  @@index([parent_id])
+  @@index([status])
+  @@index([priority])
+  @@index([created_at])
+  @@index([updated_at])
+  @@index([due_date])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id          String @id @default(uuid())
+  task_id     String
+  dependency_id String
+  created_at  DateTime @default(now())
+
+  // Relationships
+  task        Task @relation("TaskDependencies", fields: [task_id], references: [id], onDelete: Cascade)
+  dependency  Task @relation("TaskDependents", fields: [dependency_id], references: [id], onDelete: Cascade)
+
+  @@unique([task_id, dependency_id])
+  @@index([task_id])
+  @@index([dependency_id])
+  @@map("task_dependencies")
+}
+
+model TaskEvent {
+  id        String    @id @default(uuid())
+  taskId    String
+  type      String
+  data      String?
+  timestamp DateTime  @default(now())
+
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([type])
+  @@index([timestamp])
+  @@map("task_events")
+}
