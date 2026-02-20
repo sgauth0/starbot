@@ -118,9 +118,17 @@ function isListRequest(prompt: string): boolean {
     'what is the contents',
     'tell me what the contents are',
     'contents of our working directory',
-    'contents of the working directory',
+    'contents of working directory',
     'contents of current directory',
     'current folder contents',
+    // Additional patterns to catch "list files" variations
+    'list files',
+    'show files',
+    'show the files',
+    'what files',
+    'see the files',
+    'what files are',
+    'list the files',
   ];
   if (staticNeedles.some((needle) => lower.includes(needle))) return true;
 

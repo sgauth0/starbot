@@ -15,7 +15,6 @@ import { getProvider } from '../providers/index.js';
 import type { ProviderMessage, ToolCall } from '../providers/types.js';
 import { getChatMemoryContext, getIdentityContext, getRelevantContext } from '../services/retrieval.js';
 import { formatWebSearchContext, searchWeb } from '../services/web-search.js';
-import { executeFilesystemRouterPrompt } from '../services/filesystem-router.js';
 import { toolRegistry, getToolsByNames } from '../services/tools/index.js';
 import { env } from '../env.js';
 import { runTriage } from '../services/triage/index.js';
@@ -569,56 +568,6 @@ export async function generationRoutes(server: FastifyInstance) {
         return;
       }
 
-      if (effectiveIntent === 'filesystem') {
-        sendEvent('status', { message: 'Executing local filesystem action...' });
-        const fsResponse = await executeFilesystemRouterPrompt(
-          interpretedUserMessage,
-          body.client_context?.working_dir,
-        );
-
-        const assistantMessage = await prisma.message.create({
-          data: {
-            chatId,
-            role: 'assistant',
-            content: fsResponse,
-          },
-        });
-
-        const newTitle =
-          chat.title === 'New Chat'
-            ? interpretedUserMessage.slice(0, 50) +
-              (interpretedUserMessage.length > 50 ? '...' : '')
-            : chat.title;
-        const updatedAt = new Date();
-        await prisma.chat.update({
-          where: { id: chatId },
-          data: { updatedAt, title: newTitle },
-        });
-
-        sendEvent('message.final', {
-          id: assistantMessage.id,
-          role: 'assistant',
-          content: fsResponse,
-          provider: codexRouterUsed ? 'azure' : 'cloudflare',
-          model: codexRouterUsed ? env.CODEX_ROUTER_MODEL : env.INTERPRETER_MODEL,
-          modelDisplayName: codexRouterUsed ? 'Codex Router' : 'Interpreter Router',
-          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-          codex: codexHeader ? {
-            intent: codexHeader.intent,
-            category: codexHeader.category,
-            confidence: codexHeader.confidence,
-          } : undefined,
-        });
-
-        sendEvent('chat.updated', {
-          id: chatId,
-          title: newTitle,
-          updatedAt: updatedAt.toISOString(),
-        });
-
-        reply.raw.end();
-        return;
-      }
 
       // --- Web search (browse intent or codex context_needs) ---
       let webSearchContext = '';

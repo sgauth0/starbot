@@ -157,6 +157,23 @@ const MODELS: ModelDefinition[] = [
     notes: 'Deep reasoning, shows thinking process',
   },
 
+  // Azure DeepSeek-V3.1
+  {
+    id: 'deepseek-v3.1',
+    provider: 'azure',
+    deploymentName: 'DeepSeek-V3.1',
+    displayName: 'DeepSeek V3.1',
+    tier: 2,
+    capabilities: ['text', 'streaming', 'tools'],
+    contextWindow: 64000,
+    maxOutputTokens: 8192,
+    costPer1kInput: 0.002,
+    costPer1kOutput: 0.008,
+    latencyMs: 1000,
+    status: 'enabled',
+    notes: 'Latest DeepSeek model, excellent for chat',
+  },
+
   // Azure Kimi-K2.5
   {
     id: 'kimi-k2.5',
