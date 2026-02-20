@@ -1,7 +1,7 @@
 import { env } from '../env.js';
 import { getProvider } from '../providers/index.js';
 
-export type InterpreterIntent = 'chat' | 'browse' | 'filesystem' | 'code' | 'tool' | 'clarify';
+export type InterpreterIntent = 'chat' | 'browse' | 'filesystem' | 'code' | 'shell' | 'tool' | 'clarify';
 
 export interface InterpretationResult {
   shouldClarify: boolean;
@@ -32,12 +32,13 @@ function normalizeIntent(raw: unknown): InterpreterIntent | null {
   if (value === 'clarify') return 'clarify';
   if (['browse', 'web', 'web_search', 'research', 'search'].includes(value)) return 'browse';
   if (
-    ['filesystem', 'files', 'file', 'directory', 'workspace', 'repo', 'folder', 'local'].includes(
+    ['filesystem', 'files', 'file', 'directory', 'workspace', 'repo', 'folder', 'local', 'glob', 'grep'].includes(
       value,
     )
   ) {
     return 'filesystem';
   }
+  if (['shell', 'terminal', 'command', 'exec', 'bash', 'sh'].includes(value)) return 'shell';
   if (['code', 'coding', 'programming', 'edit', 'refactor', 'debug'].includes(value)) {
     return 'code';
   }
@@ -58,7 +59,7 @@ function heuristicIntents(message: string): InterpreterIntent[] {
   const text = message.toLowerCase();
   const intents: InterpreterIntent[] = [];
 
-  // Filesystem intent detection
+  // Filesystem intent detection (including write/edit/save operations)
   if (
     /\b(ls|pwd|cat|mkdir|rm|cp|mv)\b/.test(text) ||
     text.includes('directory') ||
@@ -72,6 +73,21 @@ function heuristicIntents(message: string): InterpreterIntent[] {
     text.includes('write to') ||
     text.includes('create file') ||
     text.includes('delete file') ||
+    // Write/save/edit operations
+    text.includes('save file') ||
+    text.includes('save this') ||
+    text.includes('write file') ||
+    text.includes('create new file') ||
+    text.includes('edit file') ||
+    text.includes('modify file') ||
+    text.includes('update file') ||
+    text.includes('change file') ||
+    text.includes('replace in file') ||
+    text.includes('patch file') ||
+    text.includes('make file') ||
+    text.includes('generate file') ||
+    text.includes('create a') && (text.includes('file') || text.includes('script')) ||
+    text.includes('write code') ||
     /\b(show|list|display)\s+(files?|contents?)\b/i.test(text)
   ) {
     intents.push('filesystem');
@@ -93,6 +109,31 @@ function heuristicIntents(message: string): InterpreterIntent[] {
     /what(?:'s| is) the (?:weather|time|date|price)/i.test(text)
   ) {
     intents.push('browse');
+  }
+
+  // Shell/terminal intent detection
+  if (
+    text.includes('run ') ||
+    text.includes('execute ') ||
+    text.includes('build') ||
+    text.includes('test') ||
+    text.includes('install') ||
+    text.includes('npm ') ||
+    text.includes('yarn ') ||
+    text.includes('pnpm ') ||
+    text.includes('git ') ||
+    text.includes('docker ') ||
+    text.includes('kubectl ') ||
+    text.includes('curl ') ||
+    text.includes('compile') ||
+    text.includes('deploy') ||
+    text.startsWith('cd ') ||
+    text.startsWith('ls ') ||
+    text.startsWith('rm ') ||
+    text.startsWith('mv ') ||
+    text.startsWith('cp ')
+  ) {
+    intents.push('shell');
   }
 
   // Code intent detection
@@ -142,15 +183,26 @@ export async function interpretUserMessage(message: string): Promise<Interpretat
         {
           role: 'system',
           content:
-            'You are a request interpreter and router. Return JSON only.\n\n' +
-            'Schema: {"action":"execute|clarify","primary_intent":"chat|browse|filesystem|code|tool|clarify","intents":["chat|browse|filesystem|code|tool|clarify"],"normalized_user_message":"string","clarification_question":"string","confidence":0..1,"reason":"string"}\n\n' +
+            'You are a request interpreter and router for a Codex-like AI coding assistant. Return JSON only.\n\n' +
+            'Schema: {"action":"execute|clarify","primary_intent":"chat|browse|filesystem|code|shell|tool|clarify","intents":["chat|browse|filesystem|code|shell|tool|clarify"],"normalized_user_message":"string","clarification_question":"string","confidence":0..1,"reason":"string"}\n\n' +
             'INSTRUCTIONS:\n' +
+            '- Use primary_intent=shell for terminal commands, git operations, npm/yarn/pnpm, build commands, tests\n' +
             '- Use primary_intent=browse for web lookup/research/current info requests\n' +
-            '- Use primary_intent=filesystem for local files/directories/workspace requests\n' +
-            '- Use primary_intent=code for debugging/refactoring/programming tasks\n' +
+            '- Use primary_intent=filesystem for file operations: glob (find files), grep (search in files), read, write, edit files\n' +
+            '- Use primary_intent=code for debugging/refactoring/programming tasks that require code generation\n' +
             '- Use primary_intent=chat for general knowledge/explanation questions (default)\n' +
             '- Use action=clarify only when critical details are missing\n\n' +
+            'KEYWORD MAPPINGS:\n' +
+            '- "find all", "where is", "search for", "look for" -> filesystem (use grep/glob)\n' +
+            '- "run", "execute", "build", "test", "install", "git" -> shell\n' +
+            '- "create", "write", "save", "edit", "modify" -> filesystem (write/edit tools)\n' +
+            '- "list files", "ls", "directory", "folder" -> filesystem (glob/ls)\n' +
+            '- "web", "online", "latest", "news" -> browse\n\n' +
             'EXAMPLES:\n\n' +
+            '{"action":"execute","primary_intent":"shell","intents":["shell"],"normalized_user_message":"Run npm run build","confidence":0.98,"reason":"build_command"}\n\n' +
+            '{"action":"execute","primary_intent":"filesystem","intents":["filesystem"],"normalized_user_message":"Find all TypeScript files in src/","confidence":0.95,"reason":"glob_pattern"}\n\n' +
+            '{"action":"execute","primary_intent":"filesystem","intents":["filesystem"],"normalized_user_message":"Search for function authenticate in the codebase","confidence":0.95,"reason":"grep_search"}\n\n' +
+            '{"action":"execute","primary_intent":"filesystem","intents":["filesystem"],"normalized_user_message":"Create a new file hello.py with print hello world","confidence":0.98,"reason":"file_creation"}\n\n' +
             '{"action":"execute","primary_intent":"browse","intents":["browse"],"normalized_user_message":"What\'s the weather in Paris?","confidence":0.95,"reason":"current_info_needed"}\n\n' +
             '{"action":"execute","primary_intent":"filesystem","intents":["filesystem"],"normalized_user_message":"List files in src/","confidence":0.98,"reason":"filesystem_command"}\n\n' +
             '{"action":"execute","primary_intent":"code","intents":["code"],"normalized_user_message":"Fix the bug in main.ts","confidence":0.85,"reason":"code_modification"}\n\n' +

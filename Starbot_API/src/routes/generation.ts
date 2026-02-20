@@ -2,7 +2,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { runTriage } from '../services/triage/index.js';
 import {
   getBestModelForTier,
   getModelById,
@@ -11,13 +10,15 @@ import {
   type ModelDefinition,
 } from '../services/model-catalog.js';
 import { interpretUserMessage } from '../services/interpreter.js';
+import { classifyWithCodex, serializeHeader, stripHeader, type CodexHeader } from '../services/codex-router.js';
 import { getProvider } from '../providers/index.js';
 import type { ProviderMessage, ToolCall } from '../providers/types.js';
 import { getChatMemoryContext, getIdentityContext, getRelevantContext } from '../services/retrieval.js';
 import { formatWebSearchContext, searchWeb } from '../services/web-search.js';
 import { executeFilesystemRouterPrompt } from '../services/filesystem-router.js';
-import { toolRegistry } from '../services/tools/index.js';
+import { toolRegistry, getToolsByNames } from '../services/tools/index.js';
 import { env } from '../env.js';
+import { runTriage } from '../services/triage/index.js';
 import { enforceRateLimitIfEnabled, requireAuthIfEnabled } from '../security/route-guards.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -433,28 +434,102 @@ export async function generationRoutes(server: FastifyInstance) {
       }
       const lastUserMsg = chat.messages[lastUserIndex];
 
-      // 0.5 Interpreter pass (Cloudflare) before routing.
-      sendEvent('status', { message: 'Interpreter pass (Cloudflare)...' });
-      const interpretation = await interpretUserMessage(lastUserMsg.content);
-      const interpretedUserMessage = interpretation.normalizedUserMessage || lastUserMsg.content;
-      const clarification = interpretation.clarificationQuestion?.trim();
+      // 0.5 Classification pass — Codex router or legacy interpreter+triage
+      let codexHeader: CodexHeader | null = null;
+      let interpretation: Awaited<ReturnType<typeof interpretUserMessage>> | null = null;
+      let interpretedUserMessage = lastUserMsg.content;
+      let category = 'CHAT_QA';
+      let lane: 'quick' | 'standard' | 'deep' = 'standard';
+      let complexity = 3;
+      let selectionTier = 2;
+      let codexRouterUsed = false;
 
-      // Enhanced interpreter debugging event
-      sendEvent('interpreter.debug', {
-        raw_message: lastUserMsg.content,
-        normalized_message: interpretation.normalizedUserMessage,
-        primary_intent: interpretation.primaryIntent,
-        intents: interpretation.intents,
-        confidence: interpretation.confidence,
-        reason: interpretation.reason || null,
-        should_clarify: interpretation.shouldClarify,
-      });
+      if (env.CODEX_ROUTER_ENABLED) {
+        // --- NEW: Codex Header Routing ---
+        sendEvent('status', { message: 'Codex router classification...' });
+        try {
+          codexHeader = await classifyWithCodex(lastUserMsg.content);
+          codexRouterUsed = true;
 
-      sendEvent('status', {
-        message: `Interpreter intent: ${interpretation.primaryIntent} (${interpretation.intents.join(', ')})`,
-      });
+          // Emit classification event (replaces interpreter.debug)
+          sendEvent('codex.classification', {
+            intent: codexHeader.intent,
+            category: codexHeader.category,
+            complexity: codexHeader.complexity,
+            lane: codexHeader.lane,
+            tier: codexHeader.tier,
+            tools: codexHeader.tools,
+            context_needs: codexHeader.contextNeeds,
+            confidence: codexHeader.confidence,
+            reasoning: codexHeader.reasoning,
+            safety: codexHeader.safety,
+          });
 
-      if (interpretation.shouldClarify && clarification) {
+          sendEvent('status', {
+            message: `Codex: ${codexHeader.intent} / ${codexHeader.category} (tier ${codexHeader.tier}, ${codexHeader.lane})`,
+          });
+
+          // Use header fields directly
+          category = codexHeader.category;
+          lane = codexHeader.lane;
+          complexity = codexHeader.complexity;
+          const tierMap = { quick: 1, standard: 2, deep: 3 } as const;
+          const requestedTier = tierMap[body.mode];
+          const baseTier = body.auto ? codexHeader.tier : requestedTier;
+          selectionTier = body.speed ? Math.max(1, baseTier - 1) : baseTier;
+        } catch (err) {
+          server.log.warn({ err }, 'Codex router failed, falling back to interpreter+triage');
+          sendEvent('status', { message: 'Codex router failed, using legacy pipeline...' });
+          codexHeader = null;
+          codexRouterUsed = false;
+        }
+      }
+
+      // --- FALLBACK: Legacy interpreter + triage pipeline ---
+      if (!codexRouterUsed) {
+        sendEvent('status', { message: 'Interpreter pass (Cloudflare)...' });
+        interpretation = await interpretUserMessage(lastUserMsg.content);
+        interpretedUserMessage = interpretation.normalizedUserMessage || lastUserMsg.content;
+
+        sendEvent('interpreter.debug', {
+          raw_message: lastUserMsg.content,
+          normalized_message: interpretation.normalizedUserMessage,
+          primary_intent: interpretation.primaryIntent,
+          intents: interpretation.intents,
+          confidence: interpretation.confidence,
+          reason: interpretation.reason || null,
+          should_clarify: interpretation.shouldClarify,
+        });
+
+        sendEvent('status', {
+          message: `Interpreter intent: ${interpretation.primaryIntent} (${interpretation.intents.join(', ')})`,
+        });
+
+        // Run triage for legacy path
+        const triageResult = runTriage({
+          user_message: interpretedUserMessage,
+          mode: body.mode,
+        });
+
+        category = triageResult.decision.category;
+        lane = triageResult.decision.lane;
+        complexity = triageResult.decision.complexity;
+
+        const tierMap = { quick: 1, standard: 2, deep: 3 } as const;
+        const triageTier = tierMap[lane];
+        const requestedTier = tierMap[body.mode];
+        const baseTier = body.auto ? triageTier : requestedTier;
+        selectionTier = body.speed ? Math.max(1, baseTier - 1) : baseTier;
+      }
+
+      // --- Early returns (clarify, filesystem) ---
+      const effectiveIntent = codexHeader?.intent ?? interpretation?.primaryIntent ?? 'chat';
+
+      if (effectiveIntent === 'clarify') {
+        const clarification = codexHeader
+          ? codexHeader.reasoning || 'Could you clarify what you need?'
+          : interpretation?.clarificationQuestion?.trim() || 'Could you clarify what you need?';
+
         const assistantMessage = await prisma.message.create({
           data: {
             chatId,
@@ -473,21 +548,15 @@ export async function generationRoutes(server: FastifyInstance) {
           id: assistantMessage.id,
           role: 'assistant',
           content: clarification,
-          provider: 'cloudflare',
-          model: env.INTERPRETER_MODEL,
-          modelDisplayName: 'Interpreter',
-          usage: {
-            promptTokens: 0,
-            completionTokens: 0,
-            totalTokens: 0,
-          },
-          interpreter: {
-            action: 'clarify',
-            primary_intent: interpretation.primaryIntent,
-            intents: interpretation.intents,
-            confidence: interpretation.confidence,
-            reason: interpretation.reason || null,
-          },
+          provider: codexRouterUsed ? 'azure' : 'cloudflare',
+          model: codexRouterUsed ? env.CODEX_ROUTER_MODEL : env.INTERPRETER_MODEL,
+          modelDisplayName: codexRouterUsed ? 'Codex Router' : 'Interpreter',
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          codex: codexHeader ? {
+            intent: codexHeader.intent,
+            category: codexHeader.category,
+            confidence: codexHeader.confidence,
+          } : undefined,
         });
 
         sendEvent('chat.updated', {
@@ -500,10 +569,8 @@ export async function generationRoutes(server: FastifyInstance) {
         return;
       }
 
-      if (interpretation.primaryIntent === 'filesystem') {
-        sendEvent('status', {
-          message: 'Interpreter requested filesystem: executing local filesystem action...',
-        });
+      if (effectiveIntent === 'filesystem') {
+        sendEvent('status', { message: 'Executing local filesystem action...' });
         const fsResponse = await executeFilesystemRouterPrompt(
           interpretedUserMessage,
           body.client_context?.working_dir,
@@ -532,21 +599,15 @@ export async function generationRoutes(server: FastifyInstance) {
           id: assistantMessage.id,
           role: 'assistant',
           content: fsResponse,
-          provider: 'cloudflare',
-          model: env.INTERPRETER_MODEL,
-          modelDisplayName: 'Interpreter Router',
-          usage: {
-            promptTokens: 0,
-            completionTokens: 0,
-            totalTokens: 0,
-          },
-          interpreter: {
-            action: 'execute',
-            primary_intent: interpretation.primaryIntent,
-            intents: interpretation.intents,
-            confidence: interpretation.confidence,
-            reason: interpretation.reason || null,
-          },
+          provider: codexRouterUsed ? 'azure' : 'cloudflare',
+          model: codexRouterUsed ? env.CODEX_ROUTER_MODEL : env.INTERPRETER_MODEL,
+          modelDisplayName: codexRouterUsed ? 'Codex Router' : 'Interpreter Router',
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          codex: codexHeader ? {
+            intent: codexHeader.intent,
+            category: codexHeader.category,
+            confidence: codexHeader.confidence,
+          } : undefined,
         });
 
         sendEvent('chat.updated', {
@@ -559,9 +620,14 @@ export async function generationRoutes(server: FastifyInstance) {
         return;
       }
 
+      // --- Web search (browse intent or codex context_needs) ---
       let webSearchContext = '';
-      if (interpretation.primaryIntent === 'browse') {
-        sendEvent('status', { message: 'Interpreter requested browse: running web search...' });
+      const needsWebSearch = codexHeader
+        ? (codexHeader.intent === 'browse' || codexHeader.contextNeeds.includes('web_search'))
+        : (interpretation?.primaryIntent === 'browse');
+
+      if (needsWebSearch) {
+        sendEvent('status', { message: 'Running web search...' });
         try {
           const result = await searchWeb(interpretedUserMessage, 5);
           if (result && result.hits.length > 0) {
@@ -576,58 +642,60 @@ export async function generationRoutes(server: FastifyInstance) {
         }
       }
 
-      // 1. Retrieve relevant memory context
+      // --- Selective memory retrieval ---
       sendEvent('status', { message: 'Retrieving relevant memory...' });
 
       let memoryContext = '';
       let identityContext = '';
       let chatMemoryContext = '';
+
+      // Determine what context to fetch based on codex header or default behavior
+      const needsIdentity = codexHeader
+        ? codexHeader.contextNeeds.includes('identity')
+        : true; // legacy always fetches
+      const needsWorkspaceMemory = codexHeader
+        ? (codexHeader.contextNeeds.includes('workspace_memory') || codexHeader.contextNeeds.includes('project_memory'))
+        : true;
+
       try {
         if (env.MEMORY_V2_ENABLED) {
-          sendEvent('status', { message: 'Loading identity and chat memory...' });
-          [identityContext, chatMemoryContext] = await Promise.all([
-            getIdentityContext(interpretedUserMessage, 3),
-            getChatMemoryContext(interpretedUserMessage, chatId, 5),
-          ]);
-        } else {
+          const memoryPromises: Promise<string>[] = [];
+
+          if (needsIdentity) {
+            memoryPromises.push(getIdentityContext(interpretedUserMessage, 3));
+          } else {
+            memoryPromises.push(Promise.resolve(''));
+          }
+
+          if (needsWorkspaceMemory) {
+            memoryPromises.push(getChatMemoryContext(interpretedUserMessage, chatId, 5));
+          } else {
+            memoryPromises.push(Promise.resolve(''));
+          }
+
+          [identityContext, chatMemoryContext] = await Promise.all(memoryPromises);
+        } else if (needsWorkspaceMemory) {
           memoryContext = await getRelevantContext(
             interpretedUserMessage,
             chat.projectId,
             chat.workspaceId || undefined,
-            5 // Top 5 most relevant chunks
+            5,
           );
         }
       } catch (err) {
         server.log.warn({ err }, 'Memory retrieval failed');
-        // Continue without memory if retrieval fails
       }
 
-      // Enhanced memory injection debugging event
       sendEvent('memory.injected', {
         identity_chunks: identityContext ? 1 : 0,
         chat_chunks: chatMemoryContext ? 1 : 0,
         legacy_chunks: memoryContext ? 1 : 0,
         web_search: !!webSearchContext,
         memory_v2_enabled: env.MEMORY_V2_ENABLED,
+        codex_selective: codexRouterUsed,
       });
 
-      sendEvent('status', { message: 'Running triage...' });
-
-      // 2. Run triage on last user message
-      const triageResult = runTriage({
-        user_message: interpretedUserMessage,
-        mode: body.mode,
-      });
-
-      const { category, lane, complexity } = triageResult.decision;
-
-      // 3. Map lane to tier (quick=1, standard=2, deep=3)
-      const tierMap = { quick: 1, standard: 2, deep: 3 };
-      const triageTier = tierMap[lane];
-      const requestedTier = tierMap[body.mode];
-      const baseTier = body.auto ? triageTier : requestedTier;
-      const selectionTier = body.speed ? Math.max(1, baseTier - 1) : baseTier;
-
+      // --- Model selection ---
       sendEvent('status', {
         message: body.auto
           ? `Routing auto (${category}/${lane}, complexity: ${complexity})...`
@@ -640,7 +708,6 @@ export async function generationRoutes(server: FastifyInstance) {
         });
       }
 
-      // 4. Select model from catalog (respect optional explicit preference)
       const primaryModel = await resolveRequestedModel(selectionTier, 'text', body.model_prefs);
       if (!primaryModel) {
         throw new Error('No models available. Please configure at least one provider.');
@@ -657,8 +724,16 @@ export async function generationRoutes(server: FastifyInstance) {
       );
       const candidateModels = [primaryModel, ...fallbackCandidates];
 
-      // 5. Convert messages to provider format and inject memory
+      // --- Build provider messages ---
       const providerMessages: ProviderMessage[] = [];
+
+      // Inject Codex header as system message so downstream model sees routing metadata
+      if (codexHeader) {
+        providerMessages.push({
+          role: 'system',
+          content: serializeHeader(codexHeader) + '\nThe above header classifies this request. Use it to guide your response style, depth, and tool usage.',
+        });
+      }
 
       if (identityContext) {
         providerMessages.push({
@@ -681,7 +756,6 @@ export async function generationRoutes(server: FastifyInstance) {
         });
       }
 
-      // Inject legacy memory context as system message if available
       if (memoryContext) {
         providerMessages.push({
           role: 'system',
@@ -689,7 +763,6 @@ export async function generationRoutes(server: FastifyInstance) {
         });
       }
 
-      // Inject task context if available
       if (taskContext) {
         providerMessages.push({
           role: 'system',
@@ -700,7 +773,6 @@ export async function generationRoutes(server: FastifyInstance) {
       // Add conversation messages
       providerMessages.push(
         ...chat.messages.map((m: { role: string; content: string }, idx: number) => {
-          // Handle tool result messages - convert to assistant message with tool result prefix
           if (m.role === 'tool') {
             return {
               role: 'assistant' as const,
@@ -714,8 +786,13 @@ export async function generationRoutes(server: FastifyInstance) {
         }),
       );
 
-      // 6. Determine if tools should be enabled for this session
+      // --- Selective tool injection ---
+      // Codex header tells us exactly which tools to enable; legacy enables all
       const shouldUseTools = env.TOOLS_ENABLED && toolRegistry.getAll().length > 0;
+      const activeTools = (codexHeader && codexHeader.tools.length > 0)
+        ? getToolsByNames(codexHeader.tools)
+        : (shouldUseTools ? toolRegistry.getAll() : []);
+      const toolsEnabled = shouldUseTools && activeTools.length > 0;
       const maxToolIterations = 5;
       let toolIterations = 0;
       let continueWithTools = true;
@@ -730,11 +807,26 @@ export async function generationRoutes(server: FastifyInstance) {
       while (continueWithTools && toolIterations < maxToolIterations) {
         toolIterations++;
 
-        // Prepare tool definitions for this iteration
-        const toolDefinitions = shouldUseTools
-          ? toolRegistry.toOpenAIFunctions().map(fn => ({
+        // Prepare tool definitions for this iteration (selective based on codex header)
+        const toolDefinitions = toolsEnabled
+          ? activeTools.map(tool => ({
               type: 'function' as const,
-              function: fn,
+              function: {
+                name: tool.name,
+                description: tool.description,
+                parameters: {
+                  type: 'object' as const,
+                  properties: Object.fromEntries(
+                    tool.parameters.map(p => [p.name, {
+                      type: p.type,
+                      description: p.description,
+                      ...(p.enum ? { enum: p.enum } : {}),
+                      ...(p.default !== undefined ? { default: p.default } : {}),
+                    }]),
+                  ),
+                  required: tool.parameters.filter(p => p.required).map(p => p.name),
+                },
+              },
             }))
           : undefined;
 
@@ -770,7 +862,7 @@ export async function generationRoutes(server: FastifyInstance) {
                 : candidate.maxOutputTokens,
               temperature: 0.7,
               tools: toolDefinitions,
-              tool_choice: shouldUseTools ? 'auto' : undefined,
+              tool_choice: toolsEnabled ? 'auto' : undefined,
             })) {
               if (chunk.text) {
                 fullResponse += chunk.text;
@@ -949,16 +1041,19 @@ export async function generationRoutes(server: FastifyInstance) {
         );
       }
 
-      // 7. Save assistant message
+      // 7. Strip any header artifacts from response before persisting
+      const cleanResponse = stripHeader(fullResponse);
+
+      // 8. Save assistant message
       const assistantMessage = await prisma.message.create({
         data: {
           chatId,
           role: 'assistant',
-          content: fullResponse,
+          content: cleanResponse,
         },
       });
 
-      // 8. Update chat title if needed
+      // 9. Update chat title if needed
       const newTitle = chat.title === 'New Chat'
         ? interpretedUserMessage.slice(0, 50) + (interpretedUserMessage.length > 50 ? '...' : '')
         : chat.title;
@@ -973,11 +1068,11 @@ export async function generationRoutes(server: FastifyInstance) {
         },
       });
 
-      // 9. Send final event
+      // 10. Send final event
       sendEvent('message.final', {
         id: assistantMessage.id,
         role: 'assistant',
-        content: fullResponse,
+        content: cleanResponse,
         provider: selectedModel.provider,
         model: selectedModel.deploymentName,
         modelDisplayName: selectedModel.displayName,
@@ -986,18 +1081,27 @@ export async function generationRoutes(server: FastifyInstance) {
           completionTokens: usage.completionTokens,
           totalTokens: usage.totalTokens,
         },
-        interpreter: {
+        codex: codexHeader ? {
+          intent: codexHeader.intent,
+          category: codexHeader.category,
+          complexity: codexHeader.complexity,
+          lane: codexHeader.lane,
+          tier: codexHeader.tier,
+          tools: codexHeader.tools,
+          confidence: codexHeader.confidence,
+          reasoning: codexHeader.reasoning,
+        } : undefined,
+        interpreter: interpretation ? {
           action: 'execute',
           primary_intent: interpretation.primaryIntent,
           intents: interpretation.intents,
           confidence: interpretation.confidence,
           reason: interpretation.reason || null,
-        },
+        } : undefined,
         triage: {
           category,
           lane,
           complexity,
-          elapsed_ms: triageResult.elapsed_ms,
         },
       });
 

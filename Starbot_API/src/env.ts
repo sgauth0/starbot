@@ -47,15 +47,22 @@ export const env = {
   ),
   INTERPRETER_MAX_TOKENS: parseInt(process.env.INTERPRETER_MAX_TOKENS || '220', 10),
 
+  // Codex Router (replaces interpreter + triage when enabled)
+  CODEX_ROUTER_ENABLED: process.env.CODEX_ROUTER_ENABLED !== 'false', // Default true
+  CODEX_ROUTER_MODEL: strEnv(process.env.CODEX_ROUTER_MODEL, 'gpt-5.1-codex-mini'),
+  CODEX_ROUTER_MAX_TOKENS: parseInt(process.env.CODEX_ROUTER_MAX_TOKENS || '300', 10),
+
   // Triage
   TRIAGE_MODEL_ENABLED: process.env.TRIAGE_MODEL_ENABLED === 'true',
 
   // Features
   TOOLS_ENABLED: process.env.TOOLS_ENABLED !== 'false', // Default true
   CODE_EXECUTION_ENABLED: process.env.CODE_EXECUTION_ENABLED === 'true', // Default false for security
+  SHELL_EXEC_ENABLED: process.env.SHELL_EXEC_ENABLED === 'true', // Default false for security
   WEB_SEARCH_ENABLED: process.env.WEB_SEARCH_ENABLED === 'true',
   WEB_SEARCH_API_KEY: process.env.WEB_SEARCH_API_KEY || '',
   BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY || '',
+  WORKSPACE_ROOT: strEnv(process.env.WORKSPACE_ROOT, process.cwd()),
   MEMORY_V2_ENABLED: process.env.MEMORY_V2_ENABLED === 'true',
   AUTH_ENFORCEMENT_ENABLED: process.env.AUTH_ENFORCEMENT_ENABLED === 'true',
   RATE_LIMITING_ENABLED: process.env.RATE_LIMITING_ENABLED === 'true',
@@ -108,6 +115,8 @@ export function logConfiguration() {
   }
   console.log(`  Web search enabled: ${env.WEB_SEARCH_ENABLED}`);
   console.log(`  Memory V2 enabled: ${env.MEMORY_V2_ENABLED}`);
+  console.log(`  Codex router enabled: ${env.CODEX_ROUTER_ENABLED}`);
+  console.log(`  Codex router model: ${env.CODEX_ROUTER_MODEL}`);
   console.log(`  Interpreter enabled: ${env.INTERPRETER_ENABLED}`);
   console.log(`  Interpreter model: ${env.INTERPRETER_MODEL}`);
   console.log(`  Triage model enabled: ${env.TRIAGE_MODEL_ENABLED}`);
